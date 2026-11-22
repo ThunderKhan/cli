@@ -145,3 +145,102 @@ This pass prioritized directly inspectable tool implementations (Deno, uv, Proof
 ## 11. Commit policy reminder
 
 Research notes are a dedicated documentation milestone. Future work should use a few logical milestone commits, test before committing when feasible, and preserve failure evidence. If a pushed commit fails, do not automatically erase history: fix forward or deliberately consolidate with `--force-with-lease` only when safe and coordinated (see `context.md`).
+
+---
+
+## 12. Research update — How mature tools recover from failed Windows updates (2026-11-22)
+
+### Practical result
+
+There is no universal "transactional installer" that makes every possible Windows failure disappear. Projects reduce risk by **preparing a candidate away from the installed program, keeping a recoverable old version, making the final switch as narrow as possible, and proving what happens when the switch fails**. Power loss, killed processes, access-denied operations and concurrent updaters must be considered separately from handled exceptions.
+
+### Case A — uv: rename old binary, run separate installer, restore on reported failure
+
+Source: https://github.com/astral-sh/uv/blob/main/crates/uv/src/commands/self_update.rs
+
+Inspected `execute_official_installer()` on 2026-11-22:
+- Windows-only: obtain `current_exe()` and rename it to a sibling path ending in `.previous.exe`.
+- Launch an external PowerShell installer; on unsuccessful return, attempt to rename previous back to the original name.
+- On success, request Windows-aware deletion of the previous executable.
+- The updater specifically distinguishes standalone installations from package-manager installs using an installation receipt.
+
+**What this buys:** a straightforward recoverable backup on ordinary installer error. **Limit:** the code's restoration path runs only if control returns. A process kill or power loss between rename and install must be separately recovered. This is not a guarantee of every crash point.
+
+### Case B — Scoop: version directories plus 'current' directory junction
+
+Sources:
+- https://github.com/ScoopInstaller/Scoop/wiki/The-%27Current%27-Version-Alias
+- https://github.com/ScoopInstaller/Scoop/wiki/FAQ
+- https://github.com/ScoopInstaller/Scoop/blob/master/lib/install.ps1
+
+Scoop keeps versions in separate directories and normally manages an `apps/<app>/current` junction that points at the selected version. Older versions can remain installed until cleanup, making manual rollback easier.
+
+**What this buys:** a new version can be fully prepared while the old version remains on disk; stable command paths may resolve through a pointer to the selected version.
+
+**Limits:** Scoop's `link_current()` implementation removes an existing junction and then creates a new one; this is not proof of an uninterrupted atomic pointer switch. Deletion of old versions, junction permissions, external PATH references, and crashes during retargeting still need tests. For a single executable, introducing a permanent directory-link layout may be excessive.
+
+### Case C — Rustup: separate updater process that waits for the original process
+
+Sources:
+- https://github.com/rust-lang/rustup/blob/main/src/cli/self_update/windows.rs
+- https://github.com/rust-lang/rustup/blob/main/src/cli/self_update/stage.rs
+
+On Windows, `run_update()` spawns a prepared replacement process. That process calls `wait_for_parent()` before taking the self-update lock and performing installation work via `install_bins`, then records the result.
+
+**What this buys:** replacement does not need to be attempted by the executable that is currently running; locking helps coordinate concurrent updater attempts.
+
+**Limits:** a helper introduces process-handoff, state, cleanup and failure paths. Copying Rustup's machinery into a single-binary CLI without evidence would be needless complexity.
+
+### D — Microsoft's file-replacement primitives
+
+Sources:
+- https://learn.microsoft.com/en-us/windows/win32/fileio/moving-and-replacing-files
+- https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexw
+- https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-replacefilew
+- https://learn.microsoft.com/en-us/dotnet/api/system.io.file.replace
+
+`ReplaceFile` (also exposed by .NET `File.Replace`) can replace one file with another and optionally create a backup of the original. `MoveFileEx` offers rename/replacement options; a delayed-until-reboot operation has fundamentally different semantics and cannot confirm success before reboot. File-sharing access and whether executables are open affect whether operations succeed.
+
+**Do not claim** that .NET `File.Replace` is a complete application transaction, that it works on an in-use executable, or that any two-step rename is atomic. Testing must measure the relevant Windows versions and file handles. Do not depend on the deprecated Windows transactional NTFS (TxF) facility.
+
+### The minimal failure-state contract for Proofline installation
+
+**Invariant:** up to the point of final replacement, the existing installed `proofline.exe` and its PATH entry are untouched. Any failure before that point leaves the old CLI runnable.
+
+Proposed stage model:
+
+1. `PRECHECK`: Windows x64, candidate release, install location, existing-file type, no unsafe symlinks/reparse points, required permissions.
+2. `DOWNLOAD`: fetch bounded archive and manifest into an isolated temp folder.
+3. `VERIFY`: validate official origin, checksum and strict archive contents.
+4. `STAGE`: unpack and confirm candidate executable works, including exact version.
+5. `SWAP`: use a narrow replace/backup operation, preferably staging on the *same volume*; do not allow two updates to race.
+6. `POSTCHECK`: validate the destination binary; retain backup if validation fails and attempt restore.
+7. `CLEANUP`: delete temporary files and backups only after successful postcheck; report failures explicitly.
+
+For a **fresh installation**, there is no old binary to restore, but any partial new installation must not be mistaken for success. For an **existing installation**, the old version must remain preserved or recoverable after all tested failed swaps. A crash after rename but before replacement may leave the conventional path missing; decide and test how the next installer run detects and restores the backup.
+
+### Candidate options for the first implementation
+
+| Strategy | Benefit | Risk / cost | Tentative fit |
+|---|---|---|---|
+| Staging + fail if installed exe is locked | Small, predictable, no helper | Running instances must be closed | **Preferred starting point** |
+| Staging + backup file replacement | Maintains explicit old copy for rollback | Lock/sharing semantics and postcheck restoration need tests | **Explore for installer upgrades** |
+| Versioned directories + stable link/shim | Simple retention of multiple versions | New layout, junction or launcher, recovery of pointer | Only if experiments justify it |
+| External updater helper | Needed to replace own running image safely | Handoff complexity, cleanup, timeout, locking | Future `proofline update` milestone |
+
+### Failure injection: minimum evidence
+
+1. Connection fails *before* download: old exe unchanged.
+2. Wrong checksum/malformed archive: old exe unchanged; no execution of unverified bytes.
+3. Candidate executable fails `--version`: old exe unchanged.
+4. Destination denies writes: installer fails, no old exe corruption.
+5. Installed exe is locked/open: deterministic and documented failure or verified safe replacement; never assume success.
+6. Failure immediately after backup/rename: next run can recover a working version.
+7. Failure immediately after installing new exe but before postcheck: preserve recovery option.
+8. Two parallel installer processes: at most one applies a change; no overlapping corruption.
+9. Repeated install/retry: idempotent PATH handling and no stale unsafe intermediates.
+10. Power/process termination at swap boundaries: document what is and is *not* guaranteed and use persistent recovery state if needed.
+
+**Decision:** first develop a secure standalone installer with explicit reversible failure behavior and tests, choosing the install directory and staging rules so a later Rust `proofline update` can reuse them. A running-CLI self-updater is a separate milestone, and no helper architecture is selected until reproduced Windows behavior is measured.
+
+**Evidence status:** code/docs research only. No Windows runtime test or interruption test has been performed. Do not claim full crash/power-loss safety without such evidence.
