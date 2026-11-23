@@ -1,7 +1,7 @@
 # Install the official Proofline Windows x64 CLI release for the current user.
-# First-install milestone: upgrades are intentionally refused until recovery
-# and rollback are integrated and tested. Requires no elevation or modules.
-# .\install.ps1 [-Version 0.4.7] [-InstallDir C:\path\to\bin] [-NoModifyPath]
+# Installer-managed upgrades use a verified previous image, a pending journal,
+# and postcheck/rollback. Windows upgrade validation is still required.
+# .\install.ps1 [-Version 0.5.2] [-InstallDir C:\path\to\bin] [-NoModifyPath]
 [CmdletBinding()]
 param(
     [string]$Version,
@@ -341,11 +341,208 @@ function Write-ProoflineAtomicRecord([string]$Path, [string]$Content) {
 }
 
 function Assert-ProoflineRecord([string]$Path, [string]$ExpectedVersion, [string]$ExpectedHash) {
-    $record = ConvertFrom-Json -InputObject ([IO.File]::ReadAllText($Path))
-    if ($record.schema -ne 1 -or $record.version -cne $ExpectedVersion -or
-        $record.sha256 -cne $ExpectedHash) {
+    $record = Read-ProoflineReceipt $Path
+    if ($record.version -cne $ExpectedVersion -or $record.sha256 -cne $ExpectedHash) {
         throw "An existing Proofline installation record does not match this release: $Path"
     }
+}
+
+function Read-ProoflineReceipt([string]$Path) {
+    if (-not [IO.File]::Exists($Path)) { throw 'No installer-managed receipt exists.' }
+    if ([IO.FileInfo]$Path).Length -gt 4096) { throw 'Installation receipt is too large.' }
+    $record = ConvertFrom-Json -InputObject ([IO.File]::ReadAllText($Path))
+    if ($null -eq $record -or $record.schema -ne 1 -or
+        $record.sha256 -cnotmatch '\A[A-F0-9]{64}\z') {
+        throw 'Installation receipt is invalid; refusing to modify existing executable.'
+    }
+    [void](Assert-ProoflineVersion $record.version)
+    return $record
+}
+
+function Write-ProoflineReceipt([string]$Path, [string]$Version, [string]$Hash) {
+    $record = ConvertTo-Json -Compress -InputObject ([ordered]@{
+        schema = 1
+        version = $Version
+        sha256 = $Hash
+    })
+    if (-not [IO.File]::Exists($Path)) {
+        Write-ProoflineAtomicRecord $Path $record
+    }
+    else {
+        $temp = $Path + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
+        $stream = [IO.File]::Open($temp, [IO.FileMode]::CreateNew,
+            [IO.FileAccess]::Write, [IO.FileShare]::None)
+        try {
+            $bytes = [Text.Encoding]::UTF8.GetBytes($record)
+            $stream.Write($bytes, 0, $bytes.Length)
+            $stream.Flush($true)
+        }
+        finally { $stream.Dispose() }
+        try { [IO.File]::Replace($temp, $Path, $null) }
+        finally {
+            if ([IO.File]::Exists($temp)) { [IO.File]::Delete($temp) }
+        }
+    }
+    Assert-ProoflineRecord $Path $Version $Hash
+}
+
+function Read-ProoflinePending([string]$Path) {
+    if (-not [IO.File]::Exists($Path)) { return $null }
+    if ([IO.FileInfo]$Path).Length -gt 4096) { throw 'Pending transaction is too large.' }
+    $record = ConvertFrom-Json -InputObject ([IO.File]::ReadAllText($Path))
+    if ($null -eq $record) { throw 'Pending transaction is empty.' }
+    if ($record.schema -eq 1) {
+        if ($record.sha256 -cnotmatch '\A[A-F0-9]{64}\z') {
+            throw 'Pending first-install digest is invalid.'
+        }
+        [void](Assert-ProoflineVersion $record.version)
+        return $record
+    }
+    if ($record.schema -ne 2 -or
+        $record.id -cnotmatch '\A[0-9a-f]{32}\z' -or
+        $record.oldSha256 -cnotmatch '\A[A-F0-9]{64}\z' -or
+        $record.newSha256 -cnotmatch '\A[A-F0-9]{64}\z') {
+        throw 'Pending upgrade record is invalid.'
+    }
+    [void](Assert-ProoflineVersion $record.oldVersion)
+    [void](Assert-ProoflineVersion $record.newVersion)
+    if ($record.oldSha256 -ceq $record.newSha256) {
+        throw 'Pending upgrade has identical old and new digests.'
+    }
+    return $record
+}
+
+function Get-ProoflineTransactionPaths([string]$Directory, [string]$Id) {
+    # NEVER use a path supplied directly by transaction JSON.
+    if ($Id -cnotmatch '\A[0-9a-f]{32}\z') { throw 'Invalid transaction ID.' }
+    return @{
+        old = [IO.Path]::Combine($Directory, ".proofline-recovery-$Id.exe")
+        api = [IO.Path]::Combine($Directory, ".proofline-api-backup-$Id.exe")
+        damaged = [IO.Path]::Combine($Directory, ".proofline-damaged-$Id.exe")
+    }
+}
+
+function Clear-ProoflineUpgradeFiles([hashtable]$Paths, [string]$Pending) {
+    foreach ($key in @('old', 'api')) {
+        Assert-ProoflineNoReparse $Paths[$key]
+        if ([IO.File]::Exists($Paths[$key])) { [IO.File]::Delete($Paths[$key]) }
+    }
+    [IO.File]::Delete($Pending) # delete journal LAST
+}
+
+function Recover-ProoflinePending([string]$Directory) {
+    # Caller MUST hold the stable installer lock during this operation.
+    $destination = [IO.Path]::Combine($Directory, 'proofline.exe')
+    $receipt = [IO.Path]::Combine($Directory, '.proofline-install.receipt.json')
+    $pending = [IO.Path]::Combine($Directory, '.proofline-install.pending.json')
+    $record = Read-ProoflinePending $pending
+    if ($null -eq $record) { return }
+    foreach ($path in @($destination, $receipt, $pending)) {
+        Assert-ProoflineNoReparse $path
+    }
+
+    if ($record.schema -eq 1) {
+        if (-not [IO.File]::Exists($destination)) {
+            if ([IO.File]::Exists($receipt)) {
+                throw 'Interrupted first installation has a receipt but no executable.'
+            }
+            [IO.File]::Delete($pending)
+            return
+        }
+        if ((Get-ProoflineSha256 $destination) -cne $record.sha256) {
+            throw 'Interrupted first install has an unrecognized executable; preserving journal.'
+        }
+        Assert-ProoflineExeVersion $destination $record.version
+        if ([IO.File]::Exists($receipt)) {
+            Assert-ProoflineRecord $receipt $record.version $record.sha256
+        }
+        else { Write-ProoflineReceipt $receipt $record.version $record.sha256 }
+        [IO.File]::Delete($pending)
+        Write-Host 'Recovered interrupted first installation.'
+        return
+    }
+
+    $paths = Get-ProoflineTransactionPaths $Directory $record.id
+    foreach ($path in $paths.Values) { Assert-ProoflineNoReparse $path }
+    $activeHash = $null
+    if ([IO.File]::Exists($destination)) { $activeHash = Get-ProoflineSha256 $destination }
+
+    if ($activeHash -ceq $record.newSha256) {
+        try {
+            Assert-ProoflineExeVersion $destination $record.newVersion
+            Write-ProoflineReceipt $receipt $record.newVersion $record.newSha256
+            Clear-ProoflineUpgradeFiles $paths $pending
+            Write-Host "Finalized interrupted Proofline $($record.newVersion) upgrade."
+            return
+        } catch {
+            Write-Warning "New executable is present but cannot be finalized: $($_.Exception.Message)"
+            # Try verified old copy below rather than claiming the upgrade worked.
+        }
+    }
+
+    if ($activeHash -ceq $record.oldSha256) {
+        Assert-ProoflineExeVersion $destination $record.oldVersion
+        Write-ProoflineReceipt $receipt $record.oldVersion $record.oldSha256
+        Clear-ProoflineUpgradeFiles $paths $pending
+        Write-Host "Previous Proofline $($record.oldVersion) installation remains usable."
+        return
+    }
+
+    $source = $null
+    foreach ($candidate in @($paths.old, $paths.api)) {
+        if ([IO.File]::Exists($candidate) -and
+            (Get-ProoflineSha256 $candidate) -ceq $record.oldSha256) {
+            $source = $candidate
+            break
+        }
+    }
+    if ($null -eq $source) {
+        throw 'Neither executable is verified and no valid previous-version copy remains. Files and recovery journal preserved.'
+    }
+
+    $restore = [IO.Path]::Combine($Directory, ('.proofline-restore-' + [guid]::NewGuid().ToString('N') + '.exe'))
+    [IO.File]::Copy($source, $restore, $false)
+    try {
+        if ((Get-ProoflineSha256 $restore) -cne $record.oldSha256) {
+            throw 'Verified recovery copy changed while preparing rollback.'
+        }
+        if ([IO.File]::Exists($destination)) {
+            if ([IO.File]::Exists($paths.damaged)) {
+                throw 'Damaged-file evidence path already exists; manual recovery required.'
+            }
+            [IO.File]::Replace($restore, $destination, $paths.damaged)
+        } else {
+            [IO.File]::Move($restore, $destination)
+        }
+        if ((Get-ProoflineSha256 $destination) -cne $record.oldSha256) {
+            throw 'Restored executable digest differs from previous release.'
+        }
+        Assert-ProoflineExeVersion $destination $record.oldVersion
+        Write-ProoflineReceipt $receipt $record.oldVersion $record.oldSha256
+        Clear-ProoflineUpgradeFiles $paths $pending
+        Write-Host "Restored verified Proofline $($record.oldVersion) after interrupted upgrade."
+    }
+    finally {
+        if ([IO.File]::Exists($restore)) {
+            try { [IO.File]::Delete($restore) }
+            catch { Write-Warning "Recovery staging file remains: $restore" }
+        }
+    }
+}
+
+function Invoke-ProoflinePendingRepair([string]$Directory) {
+    # Recover BEFORE network activity, so an outage cannot block local repair.
+    $directory = Resolve-ProoflineInstallDir $Directory
+    Assert-ProoflinePathTree $directory
+    if (-not [IO.Directory]::Exists($directory)) { return }
+    $pending = [IO.Path]::Combine($directory, '.proofline-install.pending.json')
+    if (-not [IO.File]::Exists($pending)) { return }
+    $lock = [IO.Path]::Combine($directory, '.proofline-install.lock')
+    Assert-ProoflineNoReparse $lock
+    $handle = [IO.File]::Open($lock, [IO.FileMode]::OpenOrCreate,
+        [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+    try { Recover-ProoflinePending $directory }
+    finally { $handle.Dispose() }
 }
 
 function Install-ProoflineArchive(
@@ -357,11 +554,9 @@ function Install-ProoflineArchive(
     $ReleaseVersion = Assert-ProoflineVersion $ReleaseVersion
     Assert-ProoflineChecksum $ArchiveBytes $ChecksumBytes
     $binary = Get-ProoflineTarExecutable $ArchiveBytes
-    $destinationHash = [Security.Cryptography.SHA256]::Create()
-    try {
-        $hash = [BitConverter]::ToString($destinationHash.ComputeHash($binary)).Replace('-', '')
-    }
-    finally { $destinationHash.Dispose() }
+    $digest = [Security.Cryptography.SHA256]::Create()
+    try { $hash = [BitConverter]::ToString($digest.ComputeHash($binary)).Replace('-', '') }
+    finally { $digest.Dispose() }
 
     $directory = Resolve-ProoflineInstallDir $Directory
     Assert-ProoflinePathTree $directory
@@ -373,45 +568,33 @@ function Install-ProoflineArchive(
     foreach ($path in @($destination, $receipt, $pending, $lock)) {
         Assert-ProoflineNoReparse $path
     }
-    $lockStream = $null
     try {
-        $lockStream = [IO.File]::Open($lock, [IO.FileMode]::OpenOrCreate,
+        $lockHandle = [IO.File]::Open($lock, [IO.FileMode]::OpenOrCreate,
             [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
     }
     catch { throw "Another installer may be running, or the lock file is unavailable: $($_.Exception.Message)" }
     try {
-        # This first milestone only installs to a vacant target. A transaction
-        # record lets the NEXT run recognize a move completed before receipt.
+        # Handle a concurrent previous installer that stopped during download.
         if ([IO.File]::Exists($pending)) {
-            Assert-ProoflineRecord $pending $ReleaseVersion $hash
-            if ([IO.File]::Exists($destination)) {
-                if ((Get-ProoflineSha256 $destination) -cne $hash) {
-                    throw 'Pending installation has an unexpected executable; manual repair is required.'
-                }
-                Assert-ProoflineExeVersion $destination $ReleaseVersion
-                if (-not [IO.File]::Exists($receipt)) {
-                    Write-ProoflineAtomicRecord $receipt ([IO.File]::ReadAllText($pending))
-                }
-                else { Assert-ProoflineRecord $receipt $ReleaseVersion $hash }
-                [IO.File]::Delete($pending)
+            Recover-ProoflinePending $directory
+        }
+        $hasDestination = [IO.File]::Exists($destination)
+        $hasReceipt = [IO.File]::Exists($receipt)
+        if ($hasDestination -ne $hasReceipt) {
+            throw 'Incomplete or unmanaged existing installation; refusing to overwrite it.'
+        }
+        $oldReceipt = $null
+        if ($hasDestination) {
+            $oldReceipt = Read-ProoflineReceipt $receipt
+            if ((Get-ProoflineSha256 $destination) -cne $oldReceipt.sha256) {
+                throw 'Existing Proofline executable does not match its installer-managed receipt.'
+            }
+            Assert-ProoflineExeVersion $destination $oldReceipt.version
+            if ($oldReceipt.version -ceq $ReleaseVersion -and
+                $oldReceipt.sha256 -ceq $hash) {
+                Write-Host "Proofline $ReleaseVersion is already installed; nothing was changed."
                 return $destination
             }
-            if ([IO.File]::Exists($receipt)) {
-                throw 'Pending installation has a receipt but no executable; manual repair is required.'
-            }
-            [IO.File]::Delete($pending)
-        }
-        if ([IO.File]::Exists($destination) -or [IO.File]::Exists($receipt)) {
-            if (-not [IO.File]::Exists($destination) -or -not [IO.File]::Exists($receipt)) {
-                throw 'Incomplete or unmanaged existing installation; refusing to overwrite it.'
-            }
-            Assert-ProoflineRecord $receipt $ReleaseVersion $hash
-            if ((Get-ProoflineSha256 $destination) -cne $hash) {
-                throw 'Existing Proofline file differs from the expected installer-managed release.'
-            }
-            Assert-ProoflineExeVersion $destination $ReleaseVersion
-            Write-Host "Proofline $ReleaseVersion is already installed; nothing was changed."
-            return $destination
         }
         $stage = [IO.Path]::Combine($directory, ('.proofline-staged-' + [guid]::NewGuid().ToString('N') + '.exe'))
         try {
@@ -423,22 +606,58 @@ function Install-ProoflineArchive(
             }
             finally { $stream.Dispose() }
             Assert-ProoflineExeVersion $stage $ReleaseVersion
+
+            if ($null -eq $oldReceipt) {
+                $record = ConvertTo-Json -Compress -InputObject ([ordered]@{
+                    schema = 1; version = $ReleaseVersion; sha256 = $hash
+                })
+                Write-ProoflineAtomicRecord $pending $record
+                [IO.File]::Move($stage, $destination)
+                if ((Get-ProoflineSha256 $destination) -cne $hash) {
+                    throw 'Installed executable digest differs after relocation.'
+                }
+                Assert-ProoflineExeVersion $destination $ReleaseVersion
+                Write-ProoflineReceipt $receipt $ReleaseVersion $hash
+                [IO.File]::Delete($pending)
+                return $destination
+            }
+
+            # Upgrade: independently preserve the previous verified executable.
+            $id = [guid]::NewGuid().ToString('N')
+            $paths = Get-ProoflineTransactionPaths $directory $id
+            foreach ($path in $paths.Values) { Assert-ProoflineNoReparse $path }
+            [IO.File]::Copy($destination, $paths.old, $false)
+            if ((Get-ProoflineSha256 $paths.old) -cne $oldReceipt.sha256) {
+                throw 'Could not preserve a verified previous executable; upgrade aborted.'
+            }
             $record = ConvertTo-Json -Compress -InputObject ([ordered]@{
-                schema = 1
-                version = $ReleaseVersion
-                sha256 = $hash
+                schema = 2
+                id = $id
+                oldVersion = $oldReceipt.version
+                oldSha256 = $oldReceipt.sha256
+                newVersion = $ReleaseVersion
+                newSha256 = $hash
             })
             Write-ProoflineAtomicRecord $pending $record
-            # Same-directory rename; if interrupted after move, pending record
-            # can be verified on the next installer invocation.
-            [IO.File]::Move($stage, $destination)
-            if ((Get-ProoflineSha256 $destination) -cne $hash) {
-                throw 'Installed executable hash differs after relocation.'
+            try {
+                [IO.File]::Replace($stage, $destination, $paths.api)
+                if ((Get-ProoflineSha256 $destination) -cne $hash) {
+                    throw 'Upgraded executable digest differs from verified candidate.'
+                }
+                Assert-ProoflineExeVersion $destination $ReleaseVersion
+                Write-ProoflineReceipt $receipt $ReleaseVersion $hash
+                Clear-ProoflineUpgradeFiles $paths $pending
+                Write-Host "Upgraded Proofline $($oldReceipt.version) to $ReleaseVersion."
+                return $destination
             }
-            Assert-ProoflineExeVersion $destination $ReleaseVersion
-            Write-ProoflineAtomicRecord $receipt $record
-            [IO.File]::Delete($pending)
-            return $destination
+            catch {
+                $originalError = $_.Exception.Message
+                try { Recover-ProoflinePending $directory }
+                catch {
+                    throw "Upgrade failed ($originalError). Automatic recovery also failed: $($_.Exception.Message). Transaction evidence was preserved."
+                }
+                throw "Upgrade encountered an error ($originalError); recovery was attempted. Verify the reported installed version."
+            }
         }
         finally {
             if ([IO.File]::Exists($stage)) {
@@ -447,11 +666,12 @@ function Install-ProoflineArchive(
             }
         }
     }
-    finally { $lockStream.Dispose() }
+    finally { $lockHandle.Dispose() }
 }
 
 function Invoke-ProoflineInstaller([string]$RequestedVersion, [string]$RequestedDirectory, [bool]$ModifyPath) {
     Assert-ProoflinePlatform
+    Invoke-ProoflinePendingRepair $RequestedDirectory
     $release = if ([string]::IsNullOrWhiteSpace($RequestedVersion)) {
         Get-ProoflineLatestVersion
     } else { Assert-ProoflineVersion $RequestedVersion }
