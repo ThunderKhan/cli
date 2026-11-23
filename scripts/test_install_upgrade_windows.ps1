@@ -123,6 +123,16 @@ try {
             Where-Object { $_.Name -like '.proofline-install.receipt.json.*' })
         Require ($leftovers.Count -eq 0) 'Receipt replacement left temporary or backup files.'
     }
+    Check 'only sharing/lock HRESULTs are retryable' {
+        $sharing = [IO.IOException]::new('temporarily held', -2147024864)
+        $lock = [IO.IOException]::new('range locked', -2147024863)
+        $denied = [UnauthorizedAccessException]::new('denied')
+        $other = [IO.IOException]::new('not a sharing violation')
+        Require (Test-ProoflineTransientReplaceFailure $sharing) 'Sharing violation not recognized.'
+        Require (Test-ProoflineTransientReplaceFailure $lock) 'Lock violation not recognized.'
+        Require (-not (Test-ProoflineTransientReplaceFailure $denied)) 'Access denial must not be retried.'
+        Require (-not (Test-ProoflineTransientReplaceFailure $other)) 'Unrelated IO failure must not be retried.'
+    }
     Check 'repeat upgrade is idempotent' {
         $dir = PrepareOld 'repeat'
         [void](Install-ProoflineArchive $script:newArchive $script:newSums '0.5.2' $dir)
