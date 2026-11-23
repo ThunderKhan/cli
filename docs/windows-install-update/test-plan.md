@@ -90,3 +90,43 @@ The contributor ran `powershell.exe -NoProfile -File .\scripts\experiment_window
 **PowerShell 7:** not installed on the contributor's laptop. This is **not a blocker** for designing PS5.1-compatible installer logic; evaluate PS7 on a Windows runner later. We do not claim PS7 tests passed.
 
 **Next gate:** run the distinct-binary test, then implement recovery state-machine tests with injected failures at transaction boundaries and a separate cross-process locking test. A normal replace test is not a sufficient basis for claiming robust upgrades.
+
+
+## 2026-11-23: distinct executable version replacement result
+
+Contributor ran the revised PowerShell 5.1 probe at **2026-11-23T00:50:32.0154576Z** on Windows NT 10.0.26200.0 / PowerShell 5.1.26100.9818. All four expected checks reported PASS, and the temporary sandbox was cleaned.
+
+**Running-executable observation:** while a temporary copy of \`cmd.exe\` remained running, \`[IO.File]::Replace\` succeeded with a **different** temporary executable copied from \`whoami.exe\`.
+
+- Old executable digest (preserved in backup): \`CCD79A7568EA9240CCD6FE124807B9D3E4DBC3A4CF92954299AC3029F4A91D02\`; 339,968 bytes.
+- New executable digest (active path after replacement): \`23240EF9F8B0A9A324110B1C2331DE31DC1B0E08F5359CB707E51A939AF56CD3\`; 98,304 bytes.
+- \`stateVerified: true\`: active hash equals new candidate hash; backup hash equals original; candidate path absent.
+
+**Conclusion [measured]:** Windows allowed this particular \`File.Replace\` while the original temporary executable was running and preserved the old executable in the backup. **Not established:** guaranteed replaceability of all Windows executables, update of the already-mapped running program, filesystem durability, or recovery after a forced process kill.
+
+**PS7 remains untested locally** because it is not installed. This is not a reason to install it on the contributor's laptop yet.
+
+### Second experiment: deliberate termination and next-process recovery
+
+New probe: \`scripts/experiment_windows_recovery.ps1\` (all fixtures are ordinary text files). Run from the repository root on Windows PowerShell 5.1:
+
+\`\`\`powershell
+powershell.exe -NoProfile -File .\scripts\experiment_windows_recovery.ps1 -ReportPath "$env:TEMP\proofline-recovery-result.json"
+\`\`\`
+
+The **Driver** runs six isolated test cases. In each, a child **Worker** writes a pending-operation record, then **terminates its own process** at a chosen boundary. A separate **Recover** child acquires the same exclusive lock, checks actual hashes, and either keeps old, finalizes new, restores old, or refuses ambiguous state while preserving evidence.
+
+| Injected stop | Expected recover result |
+|---|---|
+| Before backup | \`KEPT_OLD\` |
+| After backup | \`KEPT_OLD\` |
+| After replacement | \`FINALIZED_NEW\` |
+| After intentionally corrupting new active file | \`RESTORED_OLD\` |
+| After writing new receipt | \`FINALIZED_NEW\` |
+| After corrupting new file and both backups | \`AMBIGUOUS_PRESERVED\` (nonzero exit, pending record retained) |
+
+**Scope and caveats:** the test uses copied text bytes, not native binaries, and does not download anything or touch a Proofline installation. A forced child process termination is stronger than a handled exception but is **not power-loss testing**. This probe only exercises the proposed recovery decision tree; it does not prove final installer correctness, cross-process contention while both are live, or filesystem durability.
+
+On failure, the script preserves its temporary test directory and includes that path in the JSON for inspection. Do not mistake a \`PASS\` result here for a successful production installation.
+
+**Status:** scripted and committed, **not executed on Windows**. If the script raises a runtime error, record its message; fix the test harness itself before interpreting any recovery failures.

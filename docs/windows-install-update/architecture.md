@@ -250,3 +250,14 @@ Keep commits few and meaningful; do not automatically rewrite pushed history on 
 See [test-plan.md](./test-plan.md) for the received JSON results and evidence limitations. No production code was changed by this experiment.
 
 Relevant reference: [Microsoft ReplaceFileW failure codes and file states](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-replacefilew).
+
+
+## 13. Architecture gate after distinct-executable experiment (2026-11-23)
+
+The running-executable experiment was repeated with two **different** system-executable copies. Windows NT 10.0.26200.0 / PowerShell 5.1 allowed \`File.Replace\` while the temporary original \`cmd.exe\` copy was running. Its active on-disk hash changed to the separate \`whoami.exe\` candidate hash, and the original hash remained in the backup.
+
+This supports \`File.Replace\` as a **candidate** commit primitive, and directly disproves the overly broad assumption that Windows always refuses to replace a currently running executable. It does **not** prove that arbitrary process/image sharing modes allow replacement, nor that a running process changes to execute the new binary.
+
+**Decision for next experiment:** retain the simple same-directory, verify/stage, independent recovery copy, pending-operation record, exclusive lock, then replace/postcheck model. Before adopting it in the actual installer, fault-inject forced termination at each boundary and run recovery from a fresh process. The first version of this probe uses \`active.txt\`, \`candidate.txt\`, and hash verification rather than a real installation. Add end-to-end executable testing later.
+
+If the recovery experiment reveals inconsistent or missing post-failure state, revise the architecture rather than patching the result to appear green.
