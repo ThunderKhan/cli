@@ -308,3 +308,8 @@ pwsh.exe -NoProfile -File .\scripts\test_install_interruption_real_windows.ps1
 This last group only creates isolated/temp installations; `scripts/test_install_user_path_ci_windows.ps1` is *not* for local execution. If `pwsh.exe` is absent, the proper next verification environment is the planned Windows CI matrix, not an assumption that PowerShell 7 behaves exactly like 5.1.
 
 **Outstanding:** No upstream PR yet; CI must run after a focused branch/PR is prepared, and its minute budget/availability must be considered before starting any workflow.
+
+
+## 2026-11-23: portable PowerShell 7 validator checks PASS
+
+Contributor ran `& "$env:LOCALAPPDATA\Programs\PowerShell\7\pwsh.exe" -NoProfile -File .\scripts\test_install_windows.ps1` from Windows after installing the portable PowerShell 7 ZIP. **12 tests passed, 0 failed.** This establishes PowerShell 7 compatibility for the installer validation helpers only. The offline upgrade/rollback suite, independent process lock, genuine v0.5.1→v0.5.2 release upgrade, and eight real interruption checkpoints have not yet been reported as passing under PowerShell 7. User PATH persistence test remains CI-only.
