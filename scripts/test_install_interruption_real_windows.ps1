@@ -99,7 +99,10 @@ function Make-InstrumentedInstaller([string]$Source, [string]$Destination, [stri
     # statements. A changed installer should fail this test's setup rather
     # than silently disable fault injection.
     $text = [IO.File]::ReadAllText($Source).Replace("`r`n", "`n")
-    $abort = 'Stop-Process -Id $PID -Force -ErrorAction Stop'
+    # The marker proves this child reached the intentional termination point.
+    $mark = '[IO.File]::WriteAllText(([IO.Path]::Combine($directory, ''.injected-stop'')), ''' +
+        $Checkpoint + ''', [Text.Encoding]::ASCII)'
+    $abort = $mark + "`n" + '                Stop-Process -Id $PID -Force -ErrorAction Stop'
     if ($Checkpoint -eq 'after-journal') {
         $target = '            Write-ProoflineAtomicRecord $pending $record' +
             "`n" + '            try {'
@@ -107,20 +110,20 @@ function Make-InstrumentedInstaller([string]$Source, [string]$Destination, [stri
             "`n" + '            ' + $abort + "`n" + '            try {'
     }
     elseif ($Checkpoint -eq 'after-switch' -or $Checkpoint -eq 'corrupt-after-switch') {
-        $target = '                [IO.File]::Replace($stage, $destination, $paths.api)' +
+        $target = '                Invoke-ProoflineReplaceWithRetry $stage $destination $paths.api $hash $oldReceipt.sha256' +
             "`n" + '                if ('
         $damage = if ($Checkpoint -eq 'corrupt-after-switch') {
             '                [IO.File]::WriteAllText($destination, "INTENTIONALLY_CORRUPTED", [Text.Encoding]::ASCII)' + "`n"
         }
         else { '' }
-        $replacement = '                [IO.File]::Replace($stage, $destination, $paths.api)' +
+        $replacement = '                Invoke-ProoflineReplaceWithRetry $stage $destination $paths.api $hash $oldReceipt.sha256' +
             "`n" + $damage + '                ' + $abort + "`n" + '                if ('
     }
     elseif ($Checkpoint -eq 'after-receipt') {
         $target = '                Write-ProoflineReceipt $receipt $ReleaseVersion $hash' +
-            "`n" + '                Clear-ProoflineUpgradeFiles $paths $pending'
+            "`n" + '                Clear-ProoflineUpgradeFiles $paths $pending $hash'
         $replacement = '                Write-ProoflineReceipt $receipt $ReleaseVersion $hash' +
-            "`n" + '                ' + $abort + "`n" + '                Clear-ProoflineUpgradeFiles $paths $pending'
+            "`n" + '                ' + $abort + "`n" + '                Clear-ProoflineUpgradeFiles $paths $pending $hash'
     }
     else { throw "Unsupported injection checkpoint $Checkpoint." }
     Require ($text.Contains($target)) "Production installer checkpoint '$Checkpoint' changed."
@@ -173,9 +176,19 @@ try {
 
         $copy = Join-Path $root ("instrumented-$checkpoint.ps1")
         Make-InstrumentedInstaller $originalInstaller $copy $checkpoint
-        $workerOutput = @(& $engine -NoProfile -NonInteractive -File $PSCommandPath -Mode Worker -CaseDir $directory -FixtureDir $cache -InstallerCopy $copy 2>&1)
-        $workerExit = $LASTEXITCODE
-        Require ($workerExit -ne 0) "Worker did not terminate for $checkpoint."
+        $stdout = Join-Path $root ("worker-$checkpoint.stdout.txt")
+        $stderr = Join-Path $root ("worker-$checkpoint.stderr.txt")
+        $arguments = '-NoProfile -NonInteractive -File "' + $PSCommandPath +
+            '" -Mode Worker -CaseDir "' + $directory +
+            '" -FixtureDir "' + $cache + '" -InstallerCopy "' + $copy + '"'
+        $worker = Start-Process -FilePath $engine -ArgumentList $arguments -Wait -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+        $workerExit = $worker.ExitCode
+        $worker.Dispose()
+        $workerOutput = [IO.File]::ReadAllText($stdout) + [IO.File]::ReadAllText($stderr)
+        $marker = Join-Path $directory '.injected-stop'
+        Require ([IO.File]::Exists($marker)) "Worker failed before reaching $checkpoint; exit $workerExit; output: $workerOutput"
+        Require ([IO.File]::ReadAllText($marker) -ceq $checkpoint) "Wrong checkpoint marker for $checkpoint."
+        Require ($workerExit -eq -1) "Worker did not terminate as expected at $checkpoint; exit $workerExit; output: $workerOutput"
         $journal = Join-Path $directory '.proofline-install.pending.json'
         Require ([IO.File]::Exists($journal)) "No pending journal existed after forced termination at $checkpoint."
         $activeFile = Join-Path $directory 'proofline.exe'
@@ -190,9 +203,17 @@ try {
             Require ($activeDigest -cne $oldDigest) 'Replacement checkpoint did not change executable.'
         }
 
-        $recoverOutput = @(& $engine -NoProfile -NonInteractive -File $PSCommandPath -Mode Recover -CaseDir $directory -InstallerCopy $originalInstaller 2>&1)
-        $recoverExit = $LASTEXITCODE
-        Require ($recoverExit -eq 0) "Fresh recovery process failed for $checkpoint; output: $($recoverOutput -join ' ')"
+        $recoverStdout = Join-Path $root ("recovery-$checkpoint.stdout.txt")
+        $recoverStderr = Join-Path $root ("recovery-$checkpoint.stderr.txt")
+        $recoverArgs = '-NoProfile -NonInteractive -File "' + $PSCommandPath +
+            '" -Mode Recover -CaseDir "' + $directory +
+            '" -InstallerCopy "' + $originalInstaller + '"'
+        $recoverProc = Start-Process -FilePath $engine -ArgumentList $recoverArgs -Wait -PassThru -RedirectStandardOutput $recoverStdout -RedirectStandardError $recoverStderr
+        $recoverExit = $recoverProc.ExitCode
+        $recoverProc.Dispose()
+        $recoverOutput = [IO.File]::ReadAllText($recoverStdout) +
+            [IO.File]::ReadAllText($recoverStderr)
+        Require ($recoverExit -eq 0) "Fresh recovery process failed for $checkpoint; output: $recoverOutput"
         $digest = Assert-Installed $directory $expected[$checkpoint] ($checkpoint -eq 'corrupt-after-switch')
         if ($expected[$checkpoint] -eq '0.5.1') {
             Require ($digest -ceq $oldDigest) 'Rollback did not preserve the original executable bytes.'
