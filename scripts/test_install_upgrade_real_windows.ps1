@@ -5,7 +5,8 @@
 .DESCRIPTION
   Uses a fresh GUID-named TEMP directory only. No user PATH modifications,
   authentication, existing Proofline installation or admin access.
-  Deletes the test directory on success unless -KeepFiles is provided.
+  Executes install.ps1 under the same PowerShell edition that launched the
+  test. Deletes the test directory on success unless -KeepFiles is provided.
   Preserves it on failure for debugging. Requires network access.
 #>
 [CmdletBinding()]
@@ -23,11 +24,12 @@ $root = Join-Path ([IO.Path]::GetTempPath()) ('proofline-real-upgrade-' + [guid]
 [IO.Directory]::CreateDirectory($root) | Out-Null
 $bin = Join-Path $root 'bin'
 $oldUserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+$script:TestEngine = (Get-Process -Id $PID).Path  # Test whichever PowerShell edition invoked this script.
 $passed = $false
 
 function Install-Release([string]$Version) {
     Write-Host "Installing official Proofline $Version..."
-    & powershell.exe -NoProfile -NonInteractive -File $installer -Version $Version -InstallDir $bin -NoModifyPath
+    & $script:TestEngine -NoProfile -NonInteractive -File $installer -Version $Version -InstallDir $bin -NoModifyPath
     if ($LASTEXITCODE -ne 0) {
         throw "Installer $Version exited with code $LASTEXITCODE."
     }
