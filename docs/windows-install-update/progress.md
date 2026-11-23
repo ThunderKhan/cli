@@ -155,4 +155,24 @@ git pull --ff-only origin feat/windows-install-update
 powershell.exe -NoProfile -File .\scripts\test_install_upgrade_real_windows.ps1
 ```
 
-**Status:** Script committed but **not executed** on contributor's Windows installation. This is not a power-loss test; full crash injection, independent process races, PowerShell 7 and PATH persistence remain open.
+**Result (contributor-run, 2026-11-23): PASS.** The real-release integration test installed official v0.5.1 (SHA-256 `442D14583870A4E44291BD0AD118DFC536AA9D1096FA6E669BCD01B29BCEF379`), upgraded to v0.5.2 (SHA-256 `7B93F8FE807AAB90133FF19908921079E5A91A51A705118BC3063DC74BD9CCB5`), and repeated v0.5.2 as a no-op. Both actual executables returned expected version strings; installed receipt hashes matched; user PATH was unchanged and temporary directory cleaned. Verified through the contributor's PowerShell transcript, not by an independent assistant Windows run. **Not** a forced-interruption, separate-process race, PowerShell 7, or power-loss test.
+
+
+## M2 concurrent installer locking — test ready, Windows execution pending
+
+New script: `scripts/test_install_concurrency_windows.ps1`.
+
+- Uses two separate PowerShell 5.1 processes: one holds the stable installer lock and signals readiness; the other attempts to upgrade a fixture-managed installation.
+- Requires a controlled lock-refusal error and verifies the old executable hash, old receipt and absence of journal.
+- Releases the lock, waits for the holder to exit, then verifies the upgrade can proceed.
+- All fixtures are artificial, never executed, and live under a unique TEMP directory. The test does not access the network, registry or an existing Proofline executable.
+- On failure the isolated directory remains for investigation; the holder is stopped during cleanup.
+
+Run:
+
+```powershell
+git pull --ff-only origin feat/windows-install-update
+powershell.exe -NoProfile -File .\scripts\test_install_concurrency_windows.ps1
+```
+
+**Status:** authored and committed, **not run on Windows**. This proves (if it passes) that one cooperating installer cannot commit while another process holds the lock. It is not a randomized simultaneous-download race or a power-loss test.

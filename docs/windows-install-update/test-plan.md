@@ -217,4 +217,15 @@ The suite uses new GUID-named temporary directories and leaves them in place on 
 powershell.exe -NoProfile -File .\scripts\test_install_upgrade_real_windows.ps1
 ```
 
-**Execution status: not run yet.** On successful verification it cleans the dedicated temporary folder, or use `-KeepFiles`; on failure it preserves the directory for investigation. This is not proof of power-loss consistency or simultaneous-process safety.
+**Execution status: PASS (contributor's Windows PowerShell 5.1, 2026-11-23).** Pinned v0.5.1 was installed (SHA-256 `442D14583870A4E44291BD0AD118DFC536AA9D1096FA6E669BCD01B29BCEF379`), then upgraded to v0.5.2 (SHA-256 `7B93F8FE807AAB90133FF19908921079E5A91A51A705118BC3063DC74BD9CCB5`). Reinstalling v0.5.2 was a no-op; receipt/executable checks passed, user PATH was unchanged and disposable directory was cleaned. Evidence was contributor-provided PowerShell output. Not proof of power-loss consistency or simultaneous-process safety.
+
+
+## Cross-process lock test — prepared; not yet run
+
+`scripts/test_install_concurrency_windows.ps1` creates an isolated, fake managed installation, starts a second PowerShell process which holds the installation's lock file, and attempts a competing upgrade. The expected result is a lock-refusal error with **no changes to active bytes, receipt or pending record**. The test then releases the holder and verifies a successful upgrade, demonstrating cross-process lock coordination.
+
+```powershell
+powershell.exe -NoProfile -File .\scripts\test_install_concurrency_windows.ps1
+```
+
+**Not executed on Windows yet.** This tests lock contention from a second OS process, not a fully concurrent pair of live downloads and writes. It is wholly offline and never launches the artificial PE fixture binaries.
