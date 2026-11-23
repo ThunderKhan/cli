@@ -135,4 +135,24 @@ Contributor ran both suites on Windows PowerShell 5.1. The original validator su
 
 **Implemented fix (Windows re-test pending):** give the receipt update a unique, local backup path in the same installation directory. Keep the previous receipt backup if replacement or post-write verification fails; clean it only after the new receipt is verified. Added a dedicated offline regression test for backup cleanup, increasing the M2 suite from six to **seven** cases.
 
-**Still pending:** contributor rerun of both suites; expected results are 12/12 and 7/7 respectively. No real upgrade may be attempted until those pass. This correction was made by source inspection; no Windows PowerShell runtime was available to the assistant.
+**Contributor Windows retest, 2026-11-23:** Original M1 validator suite **12/12 passed** and M2 offline suite **7/7 passed** after the receipt-backup fix. Cases included clean upgrade, receipt-backup regression, repeated install no-op, interrupted-new finalization, restored old from corrupt active, ambiguous-state refusal, and exclusive-lock refusal. Earlier 2/6 results remain historical; the revised suite passes. Real executable upgrades are **not yet tested**.
+
+
+## Real-release M2 integration — prepared, execution pending
+
+GitHub releases v0.5.1 and v0.5.2 were verified to contain the Windows x64 archives and SHA256SUMS files. Added `scripts/test_install_upgrade_real_windows.ps1`:
+
+- Allocates a **fresh** random TEMP directory and invokes `install.ps1` for v0.5.1, v0.5.2, then v0.5.2 again.
+- Checks each real executable's `--version`, its SHA-256 hash against the installed receipt, and absence of pending/staged/recovery files.
+- Requires old and new executable hashes to differ; verifies repeat installation leaves executable and receipt hashes unchanged.
+- Runs with `-NoModifyPath` and checks the user PATH value remains unchanged.
+- Removes only its own test directory on success; keeps it on failure. `-KeepFiles` retains artifacts on success.
+
+Run from repository root:
+
+```powershell
+git pull --ff-only origin feat/windows-install-update
+powershell.exe -NoProfile -File .\scripts\test_install_upgrade_real_windows.ps1
+```
+
+**Status:** Script committed but **not executed** on contributor's Windows installation. This is not a power-loss test; full crash injection, independent process races, PowerShell 7 and PATH persistence remain open.

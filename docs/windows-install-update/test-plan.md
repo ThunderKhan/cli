@@ -200,10 +200,21 @@ Source: `scripts/test_install_upgrade_windows.ps1`, using the fake PE archive fi
 | Corrupted active executable and old backup | Refuse, retain journal and evidence |
 | Locked installation path | Refuse before changing old executable |
 
-**Results:** NOT YET RUN on Windows. Run in Windows PowerShell 5.1:
+**Results:** Contributor Windows PowerShell 5.1 rerun on 2026-11-23: **7 passed, 0 failed**, with the original validator suite at **12 passed, 0 failed**. Run future regressions with:
 
 ```powershell
 powershell.exe -NoProfile -File .\scripts\test_install_upgrade_windows.ps1
 ```
 
 The suite uses new GUID-named temporary directories and leaves them in place on failure. **Before running a real M2 upgrade**, review these results and then test pinned authentic releases in a disposable directory using `-NoModifyPath`. Existing production installations must not be chosen for the first M2 tests.
+
+
+## Real Windows release upgrade integration — pending
+
+`scripts/test_install_upgrade_real_windows.ps1` pins official v0.5.1 and v0.5.2, both confirmed available with a Windows x64 archive and checksum manifest. It installs to a unique disposable TEMP directory, never changes user PATH, checks the executable hash against its receipt, compares two different binary hashes, validates `--version`, checks transaction artifacts, and verifies that repeat installation is byte-for-byte idempotent for executable and receipt.
+
+```powershell
+powershell.exe -NoProfile -File .\scripts\test_install_upgrade_real_windows.ps1
+```
+
+**Execution status: not run yet.** On successful verification it cleans the dedicated temporary folder, or use `-KeepFiles`; on failure it preserves the directory for investigation. This is not proof of power-loss consistency or simultaneous-process safety.
