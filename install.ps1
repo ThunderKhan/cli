@@ -573,6 +573,59 @@ function Invoke-ProoflinePendingRepair([string]$Directory) {
     finally { $handle.Dispose() }
 }
 
+function Test-ProoflineTransientReplaceFailure([Exception]$Error) {
+    # Retry only Win32 sharing (32) and lock (33) violations, not
+    # arbitrary permission errors or partial filesystem failures.
+    $current = $Error
+    while ($null -ne $current) {
+        if ($current -is [IO.IOException] -and
+            $current.HResult -in @(-2147024864, -2147024863)) {
+            return $true
+        }
+        $current = $current.InnerException
+    }
+    return $false
+}
+
+function Invoke-ProoflineReplaceWithRetry(
+    [string]$Candidate,
+    [string]$Destination,
+    [string]$Backup,
+    [string]$NewHash,
+    [string]$OldHash
+) {
+    # A recently executed binary or filesystem scanner can hold a transient
+    # handle. Retry only after confirming BOTH files retain pre-switch bytes
+    # and backup path has NOT appeared. Never retry a partial replacement.
+    $delays = @(0, 150, 300, 600, 1200, 2400)
+    for ($index = 0; $index -lt $delays.Count; $index++) {
+        if ($index -gt 0) {
+            Start-Sleep -Milliseconds $delays[$index]
+            foreach ($path in @($Candidate, $Destination, $Backup)) {
+                Assert-ProoflineNoReparse $path
+            }
+            if (-not [IO.File]::Exists($Candidate) -or
+                -not [IO.File]::Exists($Destination) -or
+                [IO.File]::Exists($Backup) -or
+                (Get-ProoflineSha256 $Candidate) -cne $NewHash -or
+                (Get-ProoflineSha256 $Destination) -cne $OldHash) {
+                throw 'Replacement files changed after sharing failure; unsafe to retry.'
+            }
+        }
+        try {
+            [IO.File]::Replace($Candidate, $Destination, $Backup)
+            return
+        }
+        catch {
+            if (-not (Test-ProoflineTransientReplaceFailure $_.Exception) -or
+                $index -eq ($delays.Count - 1)) {
+                throw
+            }
+            Write-Warning "Executable replacement is temporarily locked; retrying verified state ($($index + 1)/$($delays.Count))."
+        }
+    }
+}
+
 function Install-ProoflineArchive(
     [byte[]]$ArchiveBytes,
     [byte[]]$ChecksumBytes,
@@ -671,7 +724,7 @@ function Install-ProoflineArchive(
             })
             Write-ProoflineAtomicRecord $pending $record
             try {
-                [IO.File]::Replace($stage, $destination, $paths.api)
+                Invoke-ProoflineReplaceWithRetry $stage $destination $paths.api $hash $oldReceipt.sha256
                 if ((Get-ProoflineSha256 $destination) -cne $hash) {
                     throw 'Upgraded executable digest differs from verified candidate.'
                 }
