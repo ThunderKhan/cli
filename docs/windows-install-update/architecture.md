@@ -261,3 +261,22 @@ This supports `File.Replace` as a **candidate** commit primitive, and directly d
 **Decision for next experiment:** retain the simple same-directory, verify/stage, independent recovery copy, pending-operation record, exclusive lock, then replace/postcheck model. Before adopting it in the actual installer, fault-inject forced termination at each boundary and run recovery from a fresh process. The first version of this probe uses `active.txt`, `candidate.txt`, and hash verification rather than a real installation. Add end-to-end executable testing later.
 
 If the recovery experiment reveals inconsistent or missing post-failure state, revise the architecture rather than patching the result to appear green.
+
+
+## 14. Post-interruption recovery evidence and implementation gate (2026-11-23)
+
+A contributor-run Windows PowerShell 5.1 probe simulated forced child-process termination at six points. **All six expected recovery classifications passed** on Windows NT 10.0.26200.0: keep old (twice), finalize verified new (twice), restore old after new corruption (once), and preserve evidence/refuse when old and new cannot be verified (once). The recovery child ran independently, and the final fixture hashes and receipt strings were checked by the driver. See [test-plan.md](./test-plan.md) for the test matrix and report timestamp.
+
+**Interpretation:** This is evidence that our proposed recovery **state machine** behaves as intended for tested text fixtures, not proof that a real executable can always be recovered after power failure. The ordinary file-replacement experiment also verified two distinct executable hashes under Windows; together they support proceeding to a real PowerShell installer prototype with the same safety checks.
+
+**Proceed with implementation only under these conditions:**
+
+1. Keep all production-file mutations behind release verification, strict archive validation and candidate smoke testing.
+2. Keep an independent verified old-executable copy plus bounded pending record until the new installed executable is postchecked.
+3. Separate installer receipt from user authentication data; no token or credential manipulation.
+4. Require a single-writer cross-process lock for all installer writes and future updater writes.
+5. If real files do not match either expected state, preserve evidence and refuse automatic destructive actions; never force through an ambiguous recovery.
+6. Test PowerShell 5.1 on the contributor's machine and PowerShell 7 on a Windows runner. Real download, PATH, filename/path, and failure tests still pending.
+7. Do not claim crash-consistent guarantees without testing the actual installer under simulated termination; physical power-loss behavior remains unverified.
+
+**Next coding milestone:** implement a small `install.ps1` with deterministic release-selection/download checks and a separately testable staged install/recovery core. First acceptance tests should use offline release fixtures; then exercise one *real official* published Windows archive. Self-update via Rust remains a later milestone.

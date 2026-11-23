@@ -129,4 +129,33 @@ The **Driver** runs six isolated test cases. In each, a child **Worker** writes 
 
 On failure, the script preserves its temporary test directory and includes that path in the JSON for inspection. Do not mistake a `PASS` result here for a successful production installation.
 
-**Status:** scripted and committed, **not executed on Windows**. If the script raises a runtime error, record its message; fix the test harness itself before interpreting any recovery failures.
+**Status:** executed by contributor on Windows PowerShell 5.1; all six scripted scenarios passed on the reported machine. Evidence and limitations follow. Windows PowerShell 7 and the production installer remain untested.
+
+
+## 2026-11-23: recovery experiment — actual Windows results
+
+Contributor executed `experiment_windows_recovery.ps1` in Windows PowerShell 5.1 and supplied its JSON report. **These are user-provided runtime observations, not an independent run by the assistant.**
+
+- Timestamp (UTC): `2026-11-23T00:54:27.9070385Z`
+- OS: `Microsoft Windows NT 10.0.26200.0`; PowerShell: `5.1.26100.9818`; x64.
+- `scenarioCount: 6`, `allPassed: true`, `sandboxCleaned: true`.
+- The worker process was forcibly terminated in all scenarios (`workerExitCode: -1`); a separately launched recovery process then examined the active fixture and transaction record.
+
+| Deliberately interrupted operation | Expected outcome | Observed outcome | Recovery exit | Evidence |
+|---|---|---|---:|---|
+| `before-backup` | `KEPT_OLD` | `KEPT_OLD` | 0 | Active digest equals old digest; receipt OLD |
+| `after-backup` | `KEPT_OLD` | `KEPT_OLD` | 0 | Active digest equals old digest; receipt OLD |
+| `after-replace` | `FINALIZED_NEW` | `FINALIZED_NEW` | 0 | Active digest equals new digest; receipt NEW |
+| `corrupt-after-replace` | `RESTORED_OLD` | `RESTORED_OLD` | 0 | Active digest equals old digest after repair; receipt OLD |
+| `after-receipt` | `FINALIZED_NEW` | `FINALIZED_NEW` | 0 | Active digest equals new digest; receipt NEW |
+| `ambiguous` | `AMBIGUOUS_PRESERVED` | `AMBIGUOUS_PRESERVED` | 9 | Active digest matches neither version; pending record preserved; receipt OLD |
+
+Old fixture SHA-256: `099D90CBEE62F89E6478E153EB3240EFCBE4AC2231BEDC3E84549BBEAABA87E8`. New fixture SHA-256: `A253FF09C5A8678E1FD1962B2C329245E139E45F9CC6CED4E5D7AD42C4108FC0`. Both expected hashes were independently compared against the active file in the driver. All completed recovery scenarios cleared the pending record; the ambiguous case retained it.
+
+### What this validates and what it does not
+
+**Measured:** In six deterministic, disposable **text-file** fixtures, a new PowerShell process correctly classified the active state after terminating a child process, kept or restored the old fixture where appropriate, finalized the verified new fixture, and refused an unrecoverable ambiguous state without destroying the pending record. The temporary sandbox was cleaned after all checks passed.
+
+**Not established:** actual Proofline executable validity or ability to run after restore; installer downloads, SHA-256 manifest trust, malicious archives, PATH semantics, multi-process overlap under a real lock, protection from untrusted pending-record tampering, power-loss/OS-crash durability, Windows PowerShell 7 behavior. A failure between writing the temporary pending record and moving it into place was not injected.
+
+**Decision:** Enough evidence to begin the **real installer** implementation and its offline/security tests. Do not spend more time polishing simulated recovery in isolation unless the actual installer exposes a new risk. Carry these invariants into installer integration tests with real executable smoke checks and a genuine cross-process contention test. No installer is yet implemented in this branch.
