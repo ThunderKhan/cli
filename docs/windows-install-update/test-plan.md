@@ -63,7 +63,30 @@ Sources: [Microsoft ReplaceFileW](https://learn.microsoft.com/en-us/windows/win3
 
 ## Execution record
 
-- Windows PowerShell 5.1: **not run**
+- Windows PowerShell 5.1: **first user-run probe completed on 2026-11-23; detailed results below**
 - PowerShell 7 on Windows: **not run**
 - Windows CI: **not run**
-- Approval to implement replacement strategy: **pending results**
+- Approval to implement replacement strategy: **pending distinct-binary confirmation and failure injection**
+
+
+## 2026-11-23: first Windows PowerShell 5.1 probe — evidence received
+
+The contributor ran `powershell.exe -NoProfile -File .\scripts\experiment_windows_replacement.ps1 -ReportPath "$env:TEMP\proofline-ps51-result.json"` from `D:\Projects\cli` and pasted the full JSON output.
+
+- Report timestamp: `2026-11-23T00:42:24.2163786Z`.
+- Windows version string: `Microsoft Windows NT 10.0.26200.0`.
+- PowerShell version: `5.1.26100.9818`; 64-bit OS.
+- `sandboxCleaned: true`.
+- `normal-replacement`: **PASS** — active became NEW, backup preserved OLD, candidate removed.
+- `missing-candidate`: **PASS** — OLD remained active; backup absent.
+- `locked-target`: **PASS** — exclusive handle made replacement fail; OLD remained active.
+- `exclusive-lock`: **PASS** — a second exclusive open in the *same process* was refused.
+- `running-executable`: **OBSERVED: replacement-succeeded** for a running copy of `cmd.exe`; active and backup present and candidate gone. **Important limitation:** the original experiment copied the **same** `cmd.exe` bytes into both active and candidate, so their SHA-256 hashes matched (`CCD79A7568EA9240CCD6FE124807B9D3E4DBC3A4CF92954299AC3029F4A91D02`). We therefore know the file API returned success and moved paths, but have **not** proved an actual binary change or an updater's ability to alter code in an already-running process.
+
+**Interpretation:** This refutes the broad claim that all running Windows executables categorically prohibit replacement. File sharing/mapping behavior matters. It does **not** establish universal behavior or crash-safe recovery. Results are from contributor-supplied output, not an independent run by the assistant.
+
+**Follow-up probe introduced in the next script revision:** use a running temporary copy of `cmd.exe` as active and a copy of Windows `whoami.exe` as the different candidate; record two distinct expected hashes, verify active digest becomes the candidate's and backup retains original if `File.Replace` reports success. This still cannot prove safe recovery from process termination or power loss.
+
+**PowerShell 7:** not installed on the contributor's laptop. This is **not a blocker** for designing PS5.1-compatible installer logic; evaluate PS7 on a Windows runner later. We do not claim PS7 tests passed.
+
+**Next gate:** run the distinct-binary test, then implement recovery state-machine tests with injected failures at transaction boundaries and a separate cross-process locking test. A normal replace test is not a sufficient basis for claiming robust upgrades.

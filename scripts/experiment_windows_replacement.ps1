@@ -148,18 +148,46 @@ try {
         $active = Join-Path $dir 'probe-cmd.exe'
         $next = Join-Path $dir 'next.exe'
         $backup = Join-Path $dir 'backup.exe'
+        # Use two DIFFERENT valid Windows binaries; the original probe copied cmd twice.
+        # This tests the on-disk version change, not the running process's mapped image.
+        $candidateSystemExe = Join-Path $env:windir 'System32\whoami.exe'
+        if (-not [IO.File]::Exists($candidateSystemExe)) {
+            throw 'Windows whoami.exe unavailable for distinct-binary comparison.'
+        }
         [IO.File]::Copy($env:ComSpec, $active)
-        [IO.File]::Copy($env:ComSpec, $next)
+        [IO.File]::Copy($candidateSystemExe, $next)
+        $oldHash = (Get-FileHash -LiteralPath $active -Algorithm SHA256).Hash
+        $newHash = (Get-FileHash -LiteralPath $next -Algorithm SHA256).Hash
+        if ($oldHash -eq $newHash) {
+            throw 'Unexpected identical candidate and original hashes.'
+        }
         $child = Start-Process -FilePath $active -ArgumentList '/k' -WindowStyle Hidden -PassThru
         Start-Sleep -Milliseconds 700
         if ($child.HasExited) { throw 'Copied cmd.exe exited early.' }
         $outcome = 'replacement-succeeded'
         try { [IO.File]::Replace($next, $active, $backup) }
         catch { $outcome = 'replacement-refused: ' + $_.Exception.Message }
-        Record 'running-executable' 'OBSERVED' $outcome @{
-            active = File-State $active
-            next = File-State $next
-            backup = File-State $backup
+        $activeState = File-State $active
+        $backupState = File-State $backup
+        $nextState = File-State $next
+        $stateVerified = $activeState.exists -and $backupState.exists -and
+            (-not $nextState.exists) -and $activeState.sha256 -eq $newHash -and
+            $backupState.sha256 -eq $oldHash
+        $status = 'OBSERVED'
+        if ($outcome -eq 'replacement-succeeded' -and -not $stateVerified) {
+            $status = 'FAIL'
+            $outcome += '; expected new active digest and old backup digest, but observed something else'
+        }
+        if ($outcome -eq 'replacement-succeeded' -and $stateVerified) {
+            $outcome += '; distinct on-disk executable hashes verified'
+        }
+        Record 'running-executable' $status $outcome @{
+            oldHash = $oldHash
+            candidateHash = $newHash
+            stateVerified = $stateVerified
+            active = $activeState
+            next = $nextState
+            backup = $backupState
         }
     } catch {
         Record 'running-executable' 'INCONCLUSIVE' $_.Exception.ToString() @{}

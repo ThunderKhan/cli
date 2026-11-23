@@ -231,3 +231,22 @@ Keep commits few and meaningful; do not automatically rewrite pushed history on 
 - [Microsoft Mutex semantics](https://learn.microsoft.com/en-us/dotnet/standard/threading/mutexes), [PowerShell environment variables](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_environment_variables)
 
 **Reality check:** This document is a *proposed* architecture. It explains how we intend to prevent and recover from failure, not evidence that all operations are atomic or already pass tests.
+
+
+## 12. Measured Windows baseline and architecture implications (2026-11-23)
+
+**Contributor-run PowerShell 5.1 evidence:** Windows NT `10.0.26200.0`, PS `5.1.26100.9818`. On disposable files, the first experimental probe passed normal replacement, missing source rejection, locked target refusal, and same-process exclusive lock refusal. Cleanup succeeded. The running-executable test reported **replacement succeeded** on an active, running copy of `cmd.exe`.
+
+**Important distinction:** the first running-exe test used identical `cmd.exe` binaries for old and candidate, with identical SHA-256 hashes; it establishes `File.Replace` returned success and rearranged files but **not** that an actual executable upgrade occurred. Script revision for a distinct copy of `whoami.exe` is pending a new Windows run.
+
+**Architecture update:**
+1. Do **not** state that Windows categorically prevents replacement of any running executable. It depends on file sharing, image handles and API semantics; the installer must inspect outcomes.
+2. `[IO.File]::Replace` is a promising commit mechanism for compatible filesystem paths because normal replacement and backup creation were observed. It is **not yet selected as a proven crash-safe transaction**.
+3. A separate immutable recovery copy and a persistent pending-operation record remain justified because Windows documents partial file moves on some error conditions.
+4. Keep same-volume staging, exact hash checks, exclusive updater lock, and failure injection in the acceptance requirements.
+5. Do not implement automatic Windows self-update yet: we have not tested actual different-version replacement, crash recovery, or process handoff.
+6. PS5.1 is available locally; PS7 compatibility will be validated on Windows CI or another approved Windows environment.
+
+See [test-plan.md](./test-plan.md) for the received JSON results and evidence limitations. No production code was changed by this experiment.
+
+Relevant reference: [Microsoft ReplaceFileW failure codes and file states](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-replacefilew).
