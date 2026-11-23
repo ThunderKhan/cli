@@ -310,3 +310,15 @@ powershell.exe -NoProfile -File .\scripts\test_install_interruption_real_windows
 ```
 
 **Expected if successful:** 12/12 original checks, 13/13 offline upgrade/first-install checks, and 8/8 real forced-interruption checkpoints. **This expectation is not a test result.** Other open items remain PS7 validation, actual user PATH mutation (as opposed to `-NoModifyPath`), and credible system power-loss tests.
+
+
+## Windows 5.1 full first-install and upgrade interruption retest — PASS (2026-11-23)
+
+Contributor ran these from `D:\Projects\cli` after pulling the current development branch:
+- `scripts/test_install_windows.ps1`: **12 passed, 0 failed**.
+- `scripts/test_install_upgrade_windows.ps1`: **13 passed, 0 failed**, including the three new schema-3 fresh-install recovery cases.
+- `scripts/test_install_interruption_real_windows.ps1`: **8 of 8 forced-termination scenarios passed**, including all four original upgrade cases and all four fresh-install cases. Actual official v0.5.1 and v0.5.2 archives were downloaded and verified, fresh recovery processes validated the executable and receipt, and the temporary sandbox was deleted successfully.
+
+All results are evidenced by user-provided Windows PowerShell 5.1 output, not a separate execution by this assistant. This supersedes previously pending statements for these exact cases.
+
+**Still unverified:** PowerShell 7 runtime, real User PATH write/read from a new process, whether graphical PowerShell windows appeared on the user's desktop, full device power-loss durability, and arbitrary concurrent/interrupted filesystem writes.

@@ -43,7 +43,7 @@ The forced termination suite uses **test-only instrumented copies** of the insta
 **Security caveat:** a `SHA256SUMS` manifest fetched from the same compromised origin as the archive is consistency validation, **not independent publisher authentication**. The versioned install receipt is not a cryptographic signer identity either.
 
 
-**Post-review work:** Windows PowerShell 5.1 contributor confirmed that the hidden-worker harness still passes both the concurrency test and all four existing upgrade-interruption scenarios. Because the terminal log does not show the desktop UI, the absence of flashing windows is not independently confirmed. The first-install stage-identification fix and added test coverage described above were committed later and have **not yet passed** on the contributor machine.
+**Post-review work:** Windows PowerShell 5.1 contributor confirmed that the hidden-worker harness still passes both the concurrency test and all four existing upgrade-interruption scenarios. Because the terminal log does not show the desktop UI, the absence of flashing windows is not independently confirmed. The first-install stage-identification fix and all eight forced-interruption test scenarios **subsequently passed** on the contributor's Windows PowerShell 5.1 machine (2026-11-23).
 
 
 ## CI readiness — 2026-11-23
@@ -51,3 +51,15 @@ The forced termination suite uses **test-only instrumented copies** of the insta
 Added `.github/workflows/windows-installer.yml`: pull-request and manual-dispatch-only, with a `windows-2025` two-engine matrix (`powershell.exe` Windows PowerShell 5.1 and `pwsh.exe` PowerShell 7). Both engines run the generator syntax check and the three completely offline validation/upgrade/cross-process-lock scripts. It does **not** run pinned-network release tests or intentional child-termination tests automatically.
 
 **CI status:** workflow committed but not executed. It has no `push` trigger, so pushing this development branch does not spend CI minutes automatically. It will run when a matching pull request is opened, subject to repository Actions settings/limits.
+
+
+## Windows 5.1 full first-install and upgrade interruption retest — PASS (2026-11-23)
+
+Contributor ran these from `D:\Projects\cli` after pulling the current development branch:
+- `scripts/test_install_windows.ps1`: **12 passed, 0 failed**.
+- `scripts/test_install_upgrade_windows.ps1`: **13 passed, 0 failed**, including the three new schema-3 fresh-install recovery cases.
+- `scripts/test_install_interruption_real_windows.ps1`: **8 of 8 forced-termination scenarios passed**, including all four original upgrade cases and all four fresh-install cases. Actual official v0.5.1 and v0.5.2 archives were downloaded and verified, fresh recovery processes validated the executable and receipt, and the temporary sandbox was deleted successfully.
+
+All results are evidenced by user-provided Windows PowerShell 5.1 output, not a separate execution by this assistant. This supersedes previously pending statements for these exact cases.
+
+**Still unverified:** PowerShell 7 runtime, real User PATH write/read from a new process, whether graphical PowerShell windows appeared on the user's desktop, full device power-loss durability, and arbitrary concurrent/interrupted filesystem writes.

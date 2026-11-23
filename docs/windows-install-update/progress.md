@@ -273,3 +273,15 @@ powershell.exe -NoProfile -File .\scripts\test_install_interruption_real_windows
 Added `.github/workflows/windows-installer.yml`: pull-request and manual-dispatch-only, with a `windows-2025` two-engine matrix (`powershell.exe` Windows PowerShell 5.1 and `pwsh.exe` PowerShell 7). Both engines run the generator syntax check and the three completely offline validation/upgrade/cross-process-lock scripts. It does **not** run pinned-network release tests or intentional child-termination tests automatically.
 
 **CI status:** workflow committed but not executed. It has no `push` trigger, so pushing this development branch does not spend CI minutes automatically. It will run when a matching pull request is opened, subject to repository Actions settings/limits.
+
+
+## Windows 5.1 full first-install and upgrade interruption retest — PASS (2026-11-23)
+
+Contributor ran these from `D:\Projects\cli` after pulling the current development branch:
+- `scripts/test_install_windows.ps1`: **12 passed, 0 failed**.
+- `scripts/test_install_upgrade_windows.ps1`: **13 passed, 0 failed**, including the three new schema-3 fresh-install recovery cases.
+- `scripts/test_install_interruption_real_windows.ps1`: **8 of 8 forced-termination scenarios passed**, including all four original upgrade cases and all four fresh-install cases. Actual official v0.5.1 and v0.5.2 archives were downloaded and verified, fresh recovery processes validated the executable and receipt, and the temporary sandbox was deleted successfully.
+
+All results are evidenced by user-provided Windows PowerShell 5.1 output, not a separate execution by this assistant. This supersedes previously pending statements for these exact cases.
+
+**Still unverified:** PowerShell 7 runtime, real User PATH write/read from a new process, whether graphical PowerShell windows appeared on the user's desktop, full device power-loss durability, and arbitrary concurrent/interrupted filesystem writes.
