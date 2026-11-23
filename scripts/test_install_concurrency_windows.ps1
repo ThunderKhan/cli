@@ -103,6 +103,7 @@ try {
     $start.Arguments = $args
     $start.UseShellExecute = $false
     $start.CreateNoWindow = $true
+    $start.WindowStyle = [Diagnostics.ProcessWindowStyle]::Hidden
     $holder = [Diagnostics.Process]::Start($start)
     if ($null -eq $holder) { throw 'Could not start lock holder process.' }
 

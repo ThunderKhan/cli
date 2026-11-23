@@ -94,6 +94,41 @@ if ($Mode -eq 'Worker' -or $Mode -eq 'Recover') {
     throw 'Worker unexpectedly returned: checkpoint injection did not terminate it.'
 }
 
+function Invoke-HiddenPowerShell([string]$Arguments, [string]$Purpose) {
+    # A fresh console-subsystem powershell.exe normally opens another console
+    # when launched with Start-Process. Suppress its window while preserving
+    # stdout, stderr, exit status, and a finite timeout for diagnosis.
+    $start = [Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = $engine
+    $start.Arguments = $Arguments
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.WindowStyle = [Diagnostics.ProcessWindowStyle]::Hidden
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $child = [Diagnostics.Process]::new()
+    $child.StartInfo = $start
+    try {
+        if (-not $child.Start()) { throw "Could not start $Purpose." }
+        # Drain both pipes concurrently; waiting before reading may deadlock
+        # when a child writes enough data to fill a redirected pipe.
+        $outTask = $child.StandardOutput.ReadToEndAsync()
+        $errTask = $child.StandardError.ReadToEndAsync()
+        if (-not $child.WaitForExit(90000)) {
+            try { $child.Kill() } catch { }
+            [void]$child.WaitForExit(5000)
+            throw "$Purpose did not exit within 90 seconds."
+        }
+        $child.WaitForExit()
+        return [pscustomobject]@{
+            ExitCode = $child.ExitCode
+            Output = $outTask.GetAwaiter().GetResult()
+            ErrorOutput = $errTask.GetAwaiter().GetResult()
+        }
+    }
+    finally { $child.Dispose() }
+}
+
 function Make-InstrumentedInstaller([string]$Source, [string]$Destination, [string]$Checkpoint) {
     # Normalize line endings, then require the exact current production
     # statements. A changed installer should fail this test's setup rather
@@ -181,10 +216,11 @@ try {
         $arguments = '-NoProfile -NonInteractive -File "' + $PSCommandPath +
             '" -Mode Worker -CaseDir "' + $directory +
             '" -FixtureDir "' + $cache + '" -InstallerCopy "' + $copy + '"'
-        $worker = Start-Process -FilePath $engine -ArgumentList $arguments -Wait -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+        $worker = Invoke-HiddenPowerShell $arguments "upgrade worker ($checkpoint)"
         $workerExit = $worker.ExitCode
-        $worker.Dispose()
-        $workerOutput = [IO.File]::ReadAllText($stdout) + [IO.File]::ReadAllText($stderr)
+        [IO.File]::WriteAllText($stdout, $worker.Output)
+        [IO.File]::WriteAllText($stderr, $worker.ErrorOutput)
+        $workerOutput = $worker.Output + $worker.ErrorOutput
         $marker = Join-Path $directory '.injected-stop'
         Require ([IO.File]::Exists($marker)) "Worker failed before reaching $checkpoint; exit $workerExit; output: $workerOutput"
         Require ([IO.File]::ReadAllText($marker) -ceq $checkpoint) "Wrong checkpoint marker for $checkpoint."
@@ -208,11 +244,11 @@ try {
         $recoverArgs = '-NoProfile -NonInteractive -File "' + $PSCommandPath +
             '" -Mode Recover -CaseDir "' + $directory +
             '" -InstallerCopy "' + $originalInstaller + '"'
-        $recoverProc = Start-Process -FilePath $engine -ArgumentList $recoverArgs -Wait -PassThru -RedirectStandardOutput $recoverStdout -RedirectStandardError $recoverStderr
-        $recoverExit = $recoverProc.ExitCode
-        $recoverProc.Dispose()
-        $recoverOutput = [IO.File]::ReadAllText($recoverStdout) +
-            [IO.File]::ReadAllText($recoverStderr)
+        $recovery = Invoke-HiddenPowerShell $recoverArgs "recovery worker ($checkpoint)"
+        $recoverExit = $recovery.ExitCode
+        [IO.File]::WriteAllText($recoverStdout, $recovery.Output)
+        [IO.File]::WriteAllText($recoverStderr, $recovery.ErrorOutput)
+        $recoverOutput = $recovery.Output + $recovery.ErrorOutput
         Require ($recoverExit -eq 0) "Fresh recovery process failed for $checkpoint; output: $recoverOutput"
         $digest = Assert-Installed $directory $expected[$checkpoint] ($checkpoint -eq 'corrupt-after-switch')
         if ($expected[$checkpoint] -eq '0.5.1') {
