@@ -44,3 +44,10 @@ The forced termination suite uses **test-only instrumented copies** of the insta
 
 
 **Post-review work:** Windows PowerShell 5.1 contributor confirmed that the hidden-worker harness still passes both the concurrency test and all four existing upgrade-interruption scenarios. Because the terminal log does not show the desktop UI, the absence of flashing windows is not independently confirmed. The first-install stage-identification fix and added test coverage described above were committed later and have **not yet passed** on the contributor machine.
+
+
+## CI readiness — 2026-11-23
+
+Added `.github/workflows/windows-installer.yml`: pull-request and manual-dispatch-only, with a `windows-2025` two-engine matrix (`powershell.exe` Windows PowerShell 5.1 and `pwsh.exe` PowerShell 7). Both engines run the generator syntax check and the three completely offline validation/upgrade/cross-process-lock scripts. It does **not** run pinned-network release tests or intentional child-termination tests automatically.
+
+**CI status:** workflow committed but not executed. It has no `push` trigger, so pushing this development branch does not spend CI minutes automatically. It will run when a matching pull request is opened, subject to repository Actions settings/limits.

@@ -266,3 +266,10 @@ powershell.exe -NoProfile -File .\scripts\test_install_interruption_real_windows
 ```
 
 **Expected if successful:** 12/12 original checks, 13/13 offline upgrade/first-install checks, and 8/8 real forced-interruption checkpoints. **This expectation is not a test result.** Other open items remain PS7 validation, actual user PATH mutation (as opposed to `-NoModifyPath`), and credible system power-loss tests.
+
+
+## CI readiness — 2026-11-23
+
+Added `.github/workflows/windows-installer.yml`: pull-request and manual-dispatch-only, with a `windows-2025` two-engine matrix (`powershell.exe` Windows PowerShell 5.1 and `pwsh.exe` PowerShell 7). Both engines run the generator syntax check and the three completely offline validation/upgrade/cross-process-lock scripts. It does **not** run pinned-network release tests or intentional child-termination tests automatically.
+
+**CI status:** workflow committed but not executed. It has no `push` trigger, so pushing this development branch does not spend CI minutes automatically. It will run when a matching pull request is opened, subject to repository Actions settings/limits.
