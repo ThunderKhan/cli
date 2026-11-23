@@ -307,45 +307,7 @@ try {
             Require (-not [IO.File]::Exists((Join-Path $directory '.proofline-install.receipt.json'))) 'Interrupted fresh install incorrectly wrote a receipt.'
             Require (-not [IO.File]::Exists($journal)) 'Interrupted fresh install left a pending journal.'
             $unclaimed = @(Get-ChildItem -LiteralPath $directory -Force |
-                Where-Object { $_.Name -match '^\.proofline-staged-[a-f0-9]{32}\.exe
-        $results += [pscustomobject]@{
-            checkpoint = $checkpoint
-            workerExitCode = $workerExit
-            recoveryExitCode = $recoverExit
-            recoveredVersion = $expected[$checkpoint]
-            recoveredSha256 = $digest
-        }
-    }
-
-    Require ([Environment]::GetEnvironmentVariable('Path', 'User') -ceq $pathBefore) 'User PATH was modified.'
-    $passed = $true
-}
-catch {
-    Write-Warning "FAIL real installer interruption test: $($_.Exception.ToString())"
-}
-finally {
-    if ($passed -and -not $KeepFiles) {
-        try {
-            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction Stop
-            $cleanup = $true
-        }
-        catch {
-            Write-Warning "Could not delete disposable test directory: $($_.Exception.Message)"
-            $passed = $false
-        }
-    }
-}
-Write-Host "Completed $($results.Count) of $($scenarios.Count) interruption scenarios."
-if ($passed) {
-    Write-Host 'Real Windows installer interruption integration: PASS'
-    if ($KeepFiles) { Write-Host "Retained test evidence at $root" }
-    else { Write-Host "Cleaned isolated test directory: $cleanup" }
-}
-else {
-    Write-Warning "Failure evidence preserved at: $root"
-    exit 1
-}
- })
+                Where-Object { $_.Name -match '^\.proofline-staged-[a-f0-9]{32}\.exe$' })
             Require ($unclaimed.Count -eq 0) 'Fresh-install recovery left a staged executable.'
             Write-Host "PASS $checkpoint; fresh process removed interrupted first-install files."
         }
