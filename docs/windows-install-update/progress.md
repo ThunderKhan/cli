@@ -238,3 +238,31 @@ Contributor's Windows PowerShell 5.1 transcript confirms after the retry/fault-m
 The following **later** change is **not yet validated on Windows**: child PowerShell worker and recovery processes are now started with windowless `ProcessStartInfo` instead of `Start-Process`; both stdout and stderr are drained asynchronously, with the exit code and checkpoint marker still validated. The concurrency lock-holder already used `CreateNoWindow` and now explicitly requests `WindowStyle.Hidden`. All changes are confined to tests; production `install.ps1` does not deliberately spawn PowerShell worker windows.
 
 See [review.md](./review.md) for the upstream review and remaining blockers, including PowerShell 7 and first-install staging cleanup.
+
+
+## First-install interruption recovery — implementation and tests (Windows rerun pending)
+
+The preceding Windows validation (12/12 validators, 10/10 upgrade fixtures, 4/4 real upgrade process terminations, plus the cross-process lock test) passed on the contributor's Windows PowerShell 5.1 environment. The *windowless child-process changes* were also retested and both concurrency and 4/4 upgrade interruption scenarios passed; terminal output alone does not confirm whether the user's screen had no visible window flashes.
+
+The original first-install code created a random staged executable before writing a `schema:1` pending record. If the installer was killed before recording that file's identity, recovery could not safely identify or remove it. This is distinct from the already-tested upgrade staging recovery.
+
+Updated `install.ps1`:
+- New first installs write a versioned `schema:3` pending record containing a validated 32-character transaction ID **before creating the staged executable**.
+- Stage and journal share the exact same ID. Recovery reconstructs that single path itself (never trusts a path from JSON).
+- During recovery of a fresh install, if no active executable was published, it removes only the matching *checksum-verified* stage and then removes the journal. Unrecognized or partial staged bytes cause a refusal with files and journal retained.
+- If a valid executable was published, the ordinary receipt is verified or restored before clearing the transaction.
+- Existing legacy `schema:1` pending recovery remains supported; the new code does not guess or delete unrelated legacy staged files.
+
+Added **3 offline fixture cases** covering exact-ID cleanup, tampered-stage refusal with preserved evidence, and first-install receipt finalization. The offline M2 suite now has **13 tests** (the last known run had 10/10 before these additions). Expanded `scripts/test_install_interruption_real_windows.ps1` with **4 extra** genuinely executed first-install interruption checkpoints (`fresh-after-journal`, `fresh-after-stage`, `fresh-after-move`, `fresh-after-receipt`). Together with the prior 4 upgrade checkpoints, the real suite now has **8 scenarios**, **not yet run** after expansion.
+
+Test children remain windowless; only disposable GUID-named TEMP directories are used. No production forced-kill switches are embedded in the installer.
+
+From the repository root:
+```powershell
+git pull --ff-only origin feat/windows-install-update
+powershell.exe -NoProfile -File .\scripts\test_install_windows.ps1
+powershell.exe -NoProfile -File .\scripts\test_install_upgrade_windows.ps1
+powershell.exe -NoProfile -File .\scripts\test_install_interruption_real_windows.ps1
+```
+
+**Expected if successful:** 12/12 original checks, 13/13 offline upgrade/first-install checks, and 8/8 real forced-interruption checkpoints. **This expectation is not a test result.** Other open items remain PS7 validation, actual user PATH mutation (as opposed to `-NoModifyPath`), and credible system power-loss tests.

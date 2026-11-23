@@ -15,7 +15,7 @@ Development branch: `feat/windows-install-update` (internal working branch; **do
 | PowerShell 7 validation | Not yet run |
 | Real User PATH registry persistence and fresh-terminal behavior | Not yet run |
 | Physical power loss / kernel crash / arbitrary in-progress file-write failure | Not tested; do not claim |
-| First-install kill-after-journal and staged-file garbage collection | Not tested by current real-interruption suite |
+| Fresh-install journal and exact-ID stage recovery | Implemented in schema 3; 3 offline + 4 real interruption cases **await Windows execution** |
 
 The forced termination suite uses **test-only instrumented copies** of the installer and validates checkpoint markers. It does not add crash switches to production code. All reported results are based on the contributor's Windows terminal logs, not an independent assistant reproduction.
 
@@ -34,10 +34,13 @@ The forced termination suite uses **test-only instrumented copies** of the insta
 1. Verify the updated hidden-window test harness on Windows PowerShell 5.1, including all four crash-checkpoint markers.
 2. Add PowerShell 7 and Windows offline suites to the upstream Windows CI job and validate, or obtain equivalent repeatable evidence. The existing CI workflow builds/tests the Windows executable, but doesn't run the new installer suites.
 3. Test user PATH persistence in a disposable Windows account or with registry restoration; current tests only establish a pure helper and `-NoModifyPath`.
-4. Run a deliberate **first-install** process-interruption case: schema-1 pending records currently do not carry a stage ID, so an interrupted first install may leave an untracked staged executable. Address this with exact-ID, hash-verified cleanup rather than wildcard deletion.
+4. Re-run the new first-install tests. Schema-3 now journals the stage ID before creation and removes only a matching hash-verified stage; the 3 new fixture tests and 4 real interruption checkpoints are **unverified on Windows**.
 5. Review installation in paths containing spaces/non-ASCII characters, working-directory reparse points, and write-permission failures.
 6. Keep Windows `proofline update` support separate. Publishing/hosting a Windows one-line entrypoint needs a publisher-approved path and provenance review; do not invent a hosted URL.
 
 **PR hygiene:** the implementation and tests are currently mixed with extensive exploratory `docs/windows-install-update/*` research notes and experiments. Create the final PR branch from **current `upstream/main`** and transplant only the reviewed `install.ps1`, appropriate tests, succinct Windows README/docs, and optional CI integration. No production test-crash instrumentation or temporary fixtures should be committed. Upstream `AGENTS.md` requires a hidden chronological comment containing user-submitted coding prompts in PR descriptions, unless the author is a member of the `prooflinedev` organization.
 
 **Security caveat:** a `SHA256SUMS` manifest fetched from the same compromised origin as the archive is consistency validation, **not independent publisher authentication**. The versioned install receipt is not a cryptographic signer identity either.
+
+
+**Post-review work:** Windows PowerShell 5.1 contributor confirmed that the hidden-worker harness still passes both the concurrency test and all four existing upgrade-interruption scenarios. Because the terminal log does not show the desktop UI, the absence of flashing windows is not independently confirmed. The first-install stage-identification fix and added test coverage described above were committed later and have **not yet passed** on the contributor machine.
