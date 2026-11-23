@@ -229,3 +229,12 @@ Contributor Windows PowerShell 5.1 results:
 **Residual scope:** Process termination is not power interruption. Another process may hold the executable longer than the retry period; in that case the installer must preserve/recover the managed state and report failure, rather than overwrite unsafely.
 
 References: [Microsoft system error codes](https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499-), [Microsoft ReplaceFileW](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-replacefilew).
+
+
+## 2026-11-23: confirmed interruption recovery and hidden-window test cleanup
+
+Contributor's Windows PowerShell 5.1 transcript confirms after the retry/fault-marker fixes: validator **12/12**, offline upgrade **10/10**, real forced-termination recovery **4/4** (after journal → v0.5.1, after switch → v0.5.2, corrupted active after switch → v0.5.1, after receipt → v0.5.2). Test sandbox removed on success.
+
+The following **later** change is **not yet validated on Windows**: child PowerShell worker and recovery processes are now started with windowless `ProcessStartInfo` instead of `Start-Process`; both stdout and stderr are drained asynchronously, with the exit code and checkpoint marker still validated. The concurrency lock-holder already used `CreateNoWindow` and now explicitly requests `WindowStyle.Hidden`. All changes are confined to tests; production `install.ps1` does not deliberately spawn PowerShell worker windows.
+
+See [review.md](./review.md) for the upstream review and remaining blockers, including PowerShell 7 and first-install staging cleanup.

@@ -12,7 +12,25 @@ On Linux and macOS, install the CLI with `curl -fsSL https://proofline.sh/cli | 
 
 ### Windows installation
 
-Official releases include `proofline-x86_64-pc-windows-msvc.tar.gz` with `proofline.exe`. Download the archive and `SHA256SUMS` from the same GitHub release, and compare its SHA-256 hash using `Get-FileHash -Algorithm SHA256`. Extract the archive with `tar -xzf` and put `proofline.exe` in a directory on `PATH`. Run `proofline login` to store credentials in Windows Credential Manager. To update, close running Proofline processes and replace the executable from a verified release. The Unix shell installer and self-update command do not install Windows binaries.
+On **Windows x64**, run the PowerShell installer from a checked-out copy of this repository:
+
+```powershell
+powershell.exe -NoProfile -File .\install.ps1
+```
+
+It downloads the official release and `SHA256SUMS` from `https://proofline.sh`, validates the archive, verifies `proofline.exe --version`, and installs for the **current user** in `%LOCALAPPDATA%\Programs\Proofline\bin` without administrator rights. By default it adds that directory to the user PATH; open a new terminal to run `proofline login`. It does not handle login or credentials.
+
+To pin a version or install in a disposable folder without updating PATH:
+
+```powershell
+powershell.exe -NoProfile -File .\install.ps1 -Version 0.5.2 -InstallDir "$env:TEMP\proofline-test-bin" -NoModifyPath
+```
+
+Re-running the installer with the same verified version is a no-op. Upgrading an installer-managed version preserves the previous executable and uses a pending recovery record; an unmanaged or inconsistent existing installation is not overwritten. No administrator privileges or machine-level PATH changes are required.
+
+The installer script is currently distributed **in this repository**, not via a verified Windows one-liner on `proofline.sh`. Alternatively, manually download `proofline-x86_64-pc-windows-msvc.tar.gz` and its `SHA256SUMS` from the same official release, verify the SHA-256 with `Get-FileHash`, extract `proofline.exe` and place it on PATH.
+
+Windows `proofline update` (self-update invoked from the CLI) remains unsupported; re-run `install.ps1` to upgrade an installer-managed installation.
 
 On Linux, coding agents that omit `DBUS_SESSION_BUS_ADDRESS` and `XDG_RUNTIME_DIR`
 can still use the stored sign-in when the standard `/run/user/<uid>/bus` socket

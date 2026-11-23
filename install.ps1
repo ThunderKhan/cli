@@ -1,6 +1,6 @@
 # Install the official Proofline Windows x64 CLI release for the current user.
 # Installer-managed upgrades use a verified previous image, a pending journal,
-# and postcheck/rollback. Windows upgrade validation is still required.
+# and postcheck/rollback. Installer-managed upgrades have Windows 5.1 test coverage.
 # .\install.ps1 [-Version 0.5.2] [-InstallDir C:\path\to\bin] [-NoModifyPath]
 [CmdletBinding()]
 param(
