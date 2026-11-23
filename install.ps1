@@ -349,7 +349,7 @@ function Assert-ProoflineRecord([string]$Path, [string]$ExpectedVersion, [string
 
 function Read-ProoflineReceipt([string]$Path) {
     if (-not [IO.File]::Exists($Path)) { throw 'No installer-managed receipt exists.' }
-    if ([IO.FileInfo]$Path).Length -gt 4096) { throw 'Installation receipt is too large.' }
+    if (([IO.FileInfo]$Path).Length -gt 4096) { throw 'Installation receipt is too large.' }
     $record = ConvertFrom-Json -InputObject ([IO.File]::ReadAllText($Path))
     if ($null -eq $record -or $record.schema -ne 1 -or
         $record.sha256 -cnotmatch '\A[A-F0-9]{64}\z') {
@@ -388,7 +388,7 @@ function Write-ProoflineReceipt([string]$Path, [string]$Version, [string]$Hash) 
 
 function Read-ProoflinePending([string]$Path) {
     if (-not [IO.File]::Exists($Path)) { return $null }
-    if ([IO.FileInfo]$Path).Length -gt 4096) { throw 'Pending transaction is too large.' }
+    if (([IO.FileInfo]$Path).Length -gt 4096) { throw 'Pending transaction is too large.' }
     $record = ConvertFrom-Json -InputObject ([IO.File]::ReadAllText($Path))
     if ($null -eq $record) { throw 'Pending transaction is empty.' }
     if ($record.schema -eq 1) {
