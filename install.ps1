@@ -378,9 +378,27 @@ function Write-ProoflineReceipt([string]$Path, [string]$Version, [string]$Hash) 
             $stream.Flush($true)
         }
         finally { $stream.Dispose() }
-        try { [IO.File]::Replace($temp, $Path, $null) }
+        # PowerShell 5.1/.NET Framework rejected a null backup path on
+        # receipt replacement. Give File.Replace a real, unique same-volume
+        # backup path. Preserve that backup if replacement/validation fails.
+        $backup = $Path + '.' + [guid]::NewGuid().ToString('N') + '.bak'
+        $verified = $false
+        try {
+            [IO.File]::Replace($temp, $Path, $backup)
+            Assert-ProoflineRecord $Path $Version $Hash
+            $verified = $true
+        }
         finally {
-            if ([IO.File]::Exists($temp)) { [IO.File]::Delete($temp) }
+            if ([IO.File]::Exists($temp)) {
+                try { [IO.File]::Delete($temp) }
+                catch { Write-Warning "Receipt staging file remains at $temp" }
+            }
+            # Journaled installer recovery handles errors before this point.
+            # Never discard a previous receipt until the new one is verified.
+            if ($verified -and [IO.File]::Exists($backup)) {
+                try { [IO.File]::Delete($backup) }
+                catch { Write-Warning "Previous receipt backup remains at $backup" }
+            }
         }
     }
     Assert-ProoflineRecord $Path $Version $Hash

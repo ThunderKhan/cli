@@ -114,6 +114,15 @@ try {
         Require (-not [IO.File]::Exists((Pending 'normal'))) 'Upgrade journal remains after success.'
         Require (@(Get-ChildItem -LiteralPath $dir -Force -Filter '.proofline-recovery*').Count -eq 0) 'Old backup not cleaned.'
     }
+    Check 'receipt replacement preserves and cleans up its backup' {
+        $dir = PrepareOld 'receipt-backup'
+        $receiptPath = Receipt 'receipt-backup'
+        Write-ProoflineReceipt $receiptPath '0.5.2' $script:newHash
+        Assert-ProoflineRecord $receiptPath '0.5.2' $script:newHash
+        $leftovers = @(Get-ChildItem -LiteralPath $dir -Force |
+            Where-Object { $_.Name -like '.proofline-install.receipt.json.*' })
+        Require ($leftovers.Count -eq 0) 'Receipt replacement left temporary or backup files.'
+    }
     Check 'repeat upgrade is idempotent' {
         $dir = PrepareOld 'repeat'
         [void](Install-ProoflineArchive $script:newArchive $script:newSums '0.5.2' $dir)

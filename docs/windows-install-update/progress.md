@@ -122,3 +122,17 @@ powershell.exe -NoProfile -File .\scripts\test_install_upgrade_windows.ps1
 ```
 
 **Not yet tested:** actual two-release executable upgrade, injected failure in production installer, real concurrent installer processes, Windows process-handle failure, true power-loss durability, PS7, or PATH writes. Avoid claiming these have passed.
+
+
+## M2 Windows validation failure and focused fix — 2026-11-23
+
+Contributor ran both suites on Windows PowerShell 5.1. The original validator suite **passed 12/12**. The new M2 upgrade suite **passed 2/6 and failed 4/6**:
+
+- Failed: normal upgrade, repeat upgrade, finalize interrupted new version, restore old from backup.
+- Passed: refuse/preserve ambiguous state, refuse upgrade under exclusive lock.
+- The common failure was `System.ArgumentException: The path is not of a legal form` at `[IO.File]::Replace($temp, $Path, $null)` in the receipt update path. That null backup is supported in some .NET documentation, but did not behave as intended on the contributor's PowerShell 5.1 runtime. **Do not assume a platform-independent guarantee from this single failure.**
+- Failed test fixtures were intentionally retained in the temporary directory, as designed. No real Proofline installation was involved.
+
+**Implemented fix (Windows re-test pending):** give the receipt update a unique, local backup path in the same installation directory. Keep the previous receipt backup if replacement or post-write verification fails; clean it only after the new receipt is verified. Added a dedicated offline regression test for backup cleanup, increasing the M2 suite from six to **seven** cases.
+
+**Still pending:** contributor rerun of both suites; expected results are 12/12 and 7/7 respectively. No real upgrade may be attempted until those pass. This correction was made by source inspection; no Windows PowerShell runtime was available to the assistant.
