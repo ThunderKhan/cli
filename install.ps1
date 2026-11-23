@@ -409,11 +409,14 @@ function Read-ProoflinePending([string]$Path) {
     if (([IO.FileInfo]$Path).Length -gt 4096) { throw 'Pending transaction is too large.' }
     $record = ConvertFrom-Json -InputObject ([IO.File]::ReadAllText($Path))
     if ($null -eq $record) { throw 'Pending transaction is empty.' }
-    if ($record.schema -eq 1) {
+    if ($record.schema -in @(1, 3)) {
         if ($record.sha256 -cnotmatch '\A[A-F0-9]{64}\z') {
             throw 'Pending first-install digest is invalid.'
         }
         [void](Assert-ProoflineVersion $record.version)
+        if ($record.schema -eq 3 -and $record.id -cnotmatch '\A[0-9a-f]{32}\z') {
+            throw 'Pending first-install stage ID is invalid.'
+        }
         return $record
     }
     if ($record.schema -ne 2 -or
@@ -469,10 +472,26 @@ function Recover-ProoflinePending([string]$Directory) {
         Assert-ProoflineNoReparse $path
     }
 
-    if ($record.schema -eq 1) {
+    if ($record.schema -in @(1, 3)) {
+        # Schema 3 records the exact stage ID BEFORE any staged file is
+        # created. This makes a killed first install recoverable even when
+        # termination occurs before the executable move. Legacy schema 1
+        # journal recovery remains supported without guessing stage paths.
+        $stage = $null
+        if ($record.schema -eq 3) {
+            $stage = [IO.Path]::Combine($Directory, ('.proofline-staged-' + $record.id + '.exe'))
+            Assert-ProoflineNoReparse $stage
+            if ([IO.File]::Exists($stage) -and
+                (Get-ProoflineSha256 $stage) -cne $record.sha256) {
+                throw 'Interrupted first-install stage differs from verified release; preserving journal.'
+            }
+        }
         if (-not [IO.File]::Exists($destination)) {
             if ([IO.File]::Exists($receipt)) {
                 throw 'Interrupted first installation has a receipt but no executable.'
+            }
+            if ($null -ne $stage -and [IO.File]::Exists($stage)) {
+                [IO.File]::Delete($stage)
             }
             [IO.File]::Delete($pending)
             return
@@ -485,6 +504,9 @@ function Recover-ProoflinePending([string]$Directory) {
             Assert-ProoflineRecord $receipt $record.version $record.sha256
         }
         else { Write-ProoflineReceipt $receipt $record.version $record.sha256 }
+        if ($null -ne $stage -and [IO.File]::Exists($stage)) {
+            [IO.File]::Delete($stage)
+        }
         [IO.File]::Delete($pending)
         Write-Host 'Recovered interrupted first installation.'
         return
@@ -682,6 +704,18 @@ function Install-ProoflineArchive(
         $id = [guid]::NewGuid().ToString('N')
         $stage = [IO.Path]::Combine($directory, ('.proofline-staged-' + $id + '.exe'))
         Assert-ProoflineNoReparse $stage
+        if ($null -eq $oldReceipt) {
+            # Write the schema-3 journal BEFORE creating the stage. If killed
+            # during a write, recovery retains incomplete bytes as evidence;
+            # it only deletes a stage whose digest matches the verified one.
+            $record = ConvertTo-Json -Compress -InputObject ([ordered]@{
+                schema = 3
+                id = $id
+                version = $ReleaseVersion
+                sha256 = $hash
+            })
+            Write-ProoflineAtomicRecord $pending $record
+        }
         try {
             $stream = [IO.File]::Open($stage, [IO.FileMode]::CreateNew,
                 [IO.FileAccess]::Write, [IO.FileShare]::None)
@@ -693,10 +727,6 @@ function Install-ProoflineArchive(
             Assert-ProoflineExeVersion $stage $ReleaseVersion
 
             if ($null -eq $oldReceipt) {
-                $record = ConvertTo-Json -Compress -InputObject ([ordered]@{
-                    schema = 1; version = $ReleaseVersion; sha256 = $hash
-                })
-                Write-ProoflineAtomicRecord $pending $record
                 [IO.File]::Move($stage, $destination)
                 if ((Get-ProoflineSha256 $destination) -cne $hash) {
                     throw 'Installed executable digest differs after relocation.'
