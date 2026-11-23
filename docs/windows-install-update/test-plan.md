@@ -260,3 +260,25 @@ Contributor ran `scripts/test_install_interruption_real_windows.ps1` against rea
 **Deliberate forensic behavior:** after recovery from an intentionally corrupted active executable, `.proofline-damaged-ID.exe` is kept to aid diagnosis. The real interruption harness now allows and verifies that one quarantined file only in the corruption scenario. All other scenarios still reject leftover staged/recovery artifacts. Preserving a quarantined damaged file is not the same as failing recovery.
 
 **Status:** Source updates committed, **not tested on Windows**. Re-run the offline suite (9 expected assertions) and the full real-interruption suite; do not claim all scenarios passed until the Windows output confirms them. Older first-install journals may not carry a matching stage ID; this fix addresses new schema-2 upgrade journals created after it, not arbitrary old orphan files.
+
+
+## 2026-11-23: real interruption test blocked by Windows file sharing
+
+Contributor Windows PowerShell 5.1 results:
+- Offline upgrade suite: **9 passed, 0 failed**.
+- Real installer forced termination after journal creation: **PASS**; a fresh recovery process kept verified runnable v0.5.1.
+- Real forced termination after executable replacement: **FAILED before reaching checkpoint**. The underlying `[IO.File]::Replace` raised a Windows file-in-use error. The original harness redirected the worker's stderr into the parent PowerShell error stream, obscuring the exit-code check. Report: **Completed 1 of 4 interruption scenarios**. The test retained its disposable sandbox.
+
+**Diagnosis and limits:** Windows error 32 (`ERROR_SHARING_VIOLATION`) indicates incompatible sharing/open handles, but the output does **not** establish which process held the file. This is not evidence that rollback failed; the intended stop-after-switch never happened.
+
+**Code changes committed, Windows rerun pending:**
+1. `install.ps1` retries `File.Replace` only for Windows sharing or lock HRESULTs (`0x80070020`, `0x80070021`), on a bounded schedule of up to six attempts / approximately 4.65 seconds between retries. Before every subsequent attempt, confirm the candidate and previous executable hashes, the absence of an unexpected backup and no reparse-point substitution. Partial, changed, unrecognized or non-sharing failures are not retried and remain subject to journal recovery.
+2. A new offline regression test asserts the retry classification refuses arbitrary errors. Offline M2 suite now has **10 tests**, but the new test has not been run on Windows.
+3. The real interruption harness uses independent stdout/stderr capture and checks the child exit code. Every injected termination writes a matching checkpoint marker immediately before `Stop-Process`. Missing marker means a normal worker failure, **not** successful crash injection.
+4. The after-switch and after-receipt injection anchors were updated to match the current production installer source.
+
+**Revalidation required:** Windows PowerShell 5.1 should run the offline suites and `scripts/test_install_interruption_real_windows.ps1`, confirming every injected marker and fresh-process recovery, with no manual intervention into a valuable Proofline installation. Do not claim interruption reliability until the actual full suite passes.
+
+**Residual scope:** Process termination is not power interruption. Another process may hold the executable longer than the retry period; in that case the installer must preserve/recover the managed state and report failure, rather than overwrite unsafely.
+
+References: [Microsoft system error codes](https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499-), [Microsoft ReplaceFileW](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-replacefilew).
