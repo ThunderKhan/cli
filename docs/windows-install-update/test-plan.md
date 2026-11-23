@@ -168,3 +168,20 @@ Contributor ran `powershell.exe -NoProfile -File .\scripts\test_install_windows.
 **Do not conflate this with installer integration validation:** these tests dot-source non-mutating validator helpers and never download or execute the artificial fixture binary. The new `install.ps1` has not yet been proven to install a real official release.
 
 **Next evidence:** isolated first-install + no-op reinstall using published release `v0.5.2`, followed by PowerShell 7 and recovery/concurrency tests. No default install path or user PATH should be modified during the initial live test.
+
+
+## M1 real-release installation and idempotency — actual Windows results (2026-11-23)
+
+Contributor ran the installer as a non-elevated PowerShell 5.1 script into a new, GUID-named TEMP directory using `-Version 0.5.2 -NoModifyPath`. Evidence:
+
+| Check | Outcome |
+| --- | --- |
+| Official Proofline v0.5.2 download and manifest check | Installer completed without error |
+| Extract, stage and run actual downloaded `proofline.exe` | `proofline 0.5.2` confirmed |
+| Same version re-run in same installation directory | Printed `already installed; nothing was changed` |
+| Final directory contents | `proofline.exe` (8,342,016 bytes), receipt (106 bytes), lock file (0 bytes) |
+| PATH mutation | Explicitly disabled; installer confirmed PATH unchanged |
+
+**Important testing boundary:** Direct expected file hash and detailed receipt contents were not independently printed; the installer asserted checksum/record integrity and returned success. This is a successful M1 integration run, **not yet upgrade or process interruption validation**. No PowerShell 7 or PATH-registry test is claimed.
+
+**Next test requirement for M2:** use two pinned published releases, e.g. 0.5.1 to 0.5.2 (check release existence before testing), test clean upgrade and idempotency, inject failure between writing backup/pending/replace/receipt, independently compare old/new hashes, prove executable runnable after rollback, and verify two separate installer processes cannot corrupt the installation. Keep all of this in a disposable directory and with `-NoModifyPath`.

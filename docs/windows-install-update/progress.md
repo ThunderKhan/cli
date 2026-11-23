@@ -33,7 +33,9 @@ A SHA-256 checksum downloaded from the same origin as its archive establishes co
 
 **Windows validation (contributor-reported, 2026-11-23):** Windows PowerShell 5.1 executed `scripts/test_install_windows.ps1` on Windows NT 10.0.26200.0. **12 passed, 0 failed**: official-style valid tar/checksum, missing/duplicate/malformed/mismatched manifests, traversal/unexpected-member/symlink/non-PE archives, tampered archive bytes, strict version syntax and idempotent PATH helper. This is evidence for offline validator functions, **not** a successful download or real installation.
 
-**Pending:** Official release download; fresh install/reinstall; PowerShell 7; actual PATH write; real concurrency; interrupted first installation and upgrade. `install.ps1` has not been end-to-end tested.
+**M1 end-to-end verified in contributor-provided Windows PowerShell 5.1 output (2026-11-23):** real `v0.5.2` official release downloaded, verified and installed into a fresh temporary directory using `-NoModifyPath`. The installed executable returned `proofline 0.5.2`. A second run with the same version and directory said `already installed; nothing was changed`. Final directory listing: `.proofline-install.lock` (0 bytes), `.proofline-install.receipt.json` (106 bytes), `proofline.exe` (8,342,016 bytes). No pending record appeared in the listing. **PATH was explicitly left unchanged.** This is the first live installation of M1, not a test of upgrades or default PATH modification.
+
+**Still pending:** Network failure injection and corrupted real-release cases; PowerShell 7; actual PATH write; real concurrency; interrupted first installation and upgrades.
 
 ### Safe contributor test sequence
 
@@ -42,7 +44,7 @@ A SHA-256 checksum downloaded from the same origin as its archive establishes co
 3. Inspect the results before attempting any download/installation.
 4. Real installer test later, in an isolated directory with an actual published release, preferably a disposable Windows account/VM. The default path changes user PATH; use `-NoModifyPath` for isolation. Never test upgrades on a valuable installed executable until M2 is delivered.
 
-## M2 — Installer-managed upgrade/recovery (not started)
+## M2 — Installer-managed upgrade/recovery (next implementation)
 
 - Reuse prior research's observed `File.Replace` behavior, but with a verified old-executable copy and recoverable pending transaction.
 - Validate old version, new candidate and receipt across success and injected failures.
@@ -74,3 +76,22 @@ Get-ChildItem -LiteralPath $probeDir -Force | Select-Object Name,Length
 ```
 
 Record the full installer output, version command result, no-op reinstall output, and folder listing. Do not delete the test folder before we review any failure; a failed first installation may leave recovery evidence. Do **not** test over an existing real Proofline installation at M1. If an error occurs, capture it rather than editing the script manually.
+
+
+## M1 live integration evidence — 2026-11-23 (contributor run)
+
+The contributor successfully executed:
+
+```powershell
+$probeDir = Join-Path $env:TEMP ("proofline-m1-" + [guid]::NewGuid().ToString("N"))
+powershell.exe -NoProfile -File .\install.ps1 -Version 0.5.2 -InstallDir $probeDir -NoModifyPath
+& (Join-Path $probeDir 'proofline.exe') --version
+powershell.exe -NoProfile -File .\install.ps1 -Version 0.5.2 -InstallDir $probeDir -NoModifyPath
+Get-ChildItem -LiteralPath $probeDir -Force | Select-Object Name, Length
+```
+
+**Observed:** installer printed `Verified proofline 0.5.2`; direct version check returned `proofline 0.5.2`; repeated invocation printed `Proofline 0.5.2 is already installed; nothing was changed.`; folder contained only the expected executable, receipt and lock. Executable length `8342016` bytes. This evidence is from the user's PowerShell transcript, not a separate reproduction by the assistant.
+
+**Remaining M1 caveat:** A successful run does not independently establish resistance to all malicious release-server responses, execution races, crash consistency, nor absence of external compromise. PowerShell 7 and user PATH persistence are untested.
+
+**M2 scope gate:** Implement upgrade in a separate logical milestone without expanding the PR to native Windows self-update. Preserve a known-good installed binary and receipt, keep a pending journal over the replacement window, detect interrupted swaps, verify the result and restore the previous verified executable on ordinary failures. Test upgrade from **two distinct authentic release versions** in a disposable directory before touching a normal installation. Make unexpected file/receipt states fail closed and leave evidence.
