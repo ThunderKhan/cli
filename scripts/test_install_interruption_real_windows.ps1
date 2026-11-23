@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-  End-to-end tests for forcibly interrupted Windows executable upgrades.
+  End-to-end tests for forcibly interrupted Windows executable installs and upgrades.
 .DESCRIPTION
   Downloads two pinned official Proofline releases once, installs into
   disposable GUID-named TEMP directories, and generates INSTRUMENTED COPIES
@@ -87,10 +87,13 @@ if ($Mode -eq 'Worker' -or $Mode -eq 'Recover') {
         exit 0
     }
     if ([string]::IsNullOrWhiteSpace($FixtureDir)) { throw 'Missing fixture directory.' }
-    $newArchive = Get-TestBytes $FixtureDir 'new.tar.gz'
-    $newManifest = Get-TestBytes $FixtureDir 'new-SHA256SUMS'
+    $fresh = [IO.File]::Exists((Join-Path $CaseDir '.first-install-case'))
+    $name = if ($fresh) { 'old' } else { 'new' }
+    $version = if ($fresh) { '0.5.1' } else { '0.5.2' }
+    $archive = Get-TestBytes $FixtureDir "$name.tar.gz"
+    $manifest = Get-TestBytes $FixtureDir "$name-SHA256SUMS"
     # An instrumented installer will kill ONLY THIS worker at the checkpoint.
-    [void](Install-ProoflineArchive $newArchive $newManifest '0.5.2' $CaseDir)
+    [void](Install-ProoflineArchive $archive $manifest $version $CaseDir)
     throw 'Worker unexpectedly returned: checkpoint injection did not terminate it.'
 }
 
@@ -160,6 +163,30 @@ function Make-InstrumentedInstaller([string]$Source, [string]$Destination, [stri
         $replacement = '                Write-ProoflineReceipt $receipt $ReleaseVersion $hash' +
             "`n" + '                ' + $abort + "`n" + '                Clear-ProoflineUpgradeFiles $paths $pending $hash'
     }
+    elseif ($Checkpoint -eq 'fresh-after-journal') {
+        $target = '            Write-ProoflineAtomicRecord $pending $record' +
+            "`n" + '        }' + "`n" + '        try {'
+        $replacement = '            Write-ProoflineAtomicRecord $pending $record' +
+            "`n" + '            ' + $abort + "`n" + '        }' + "`n" + '        try {'
+    }
+    elseif ($Checkpoint -eq 'fresh-after-stage') {
+        $target = '            Assert-ProoflineExeVersion $stage $ReleaseVersion' +
+            "`n`n" + '            if ($null -eq $oldReceipt) {'
+        $replacement = '            Assert-ProoflineExeVersion $stage $ReleaseVersion' +
+            "`n" + '            ' + $abort + "`n`n" + '            if ($null -eq $oldReceipt) {'
+    }
+    elseif ($Checkpoint -eq 'fresh-after-move') {
+        $target = '                [IO.File]::Move($stage, $destination)' +
+            "`n" + '                if ('
+        $replacement = '                [IO.File]::Move($stage, $destination)' +
+            "`n" + '                ' + $abort + "`n" + '                if ('
+    }
+    elseif ($Checkpoint -eq 'fresh-after-receipt') {
+        $target = '                Write-ProoflineReceipt $receipt $ReleaseVersion $hash' +
+            "`n" + '                [IO.File]::Delete($pending)'
+        $replacement = '                Write-ProoflineReceipt $receipt $ReleaseVersion $hash' +
+            "`n" + '                ' + $abort + "`n" + '                [IO.File]::Delete($pending)'
+    }
     else { throw "Unsupported injection checkpoint $Checkpoint." }
     Require ($text.Contains($target)) "Production installer checkpoint '$Checkpoint' changed."
     Require (($text.Split([string[]]@($target), [StringSplitOptions]::None).Count) -eq 2) "Checkpoint '$Checkpoint' is not unique."
@@ -171,12 +198,19 @@ $root = Join-Path ([IO.Path]::GetTempPath()) ('proofline-real-interruption-' + [
 [IO.Directory]::CreateDirectory($root) | Out-Null
 $cache = Join-Path $root 'cache'
 [IO.Directory]::CreateDirectory($cache) | Out-Null
-$scenarios = @('after-journal', 'after-switch', 'corrupt-after-switch', 'after-receipt')
+$scenarios = @(
+    'after-journal', 'after-switch', 'corrupt-after-switch', 'after-receipt',
+    'fresh-after-journal', 'fresh-after-stage', 'fresh-after-move', 'fresh-after-receipt'
+)
 $expected = @{
     'after-journal' = '0.5.1'
     'after-switch' = '0.5.2'
     'corrupt-after-switch' = '0.5.1'
     'after-receipt' = '0.5.2'
+    'fresh-after-journal' = 'absent'
+    'fresh-after-stage' = 'absent'
+    'fresh-after-move' = '0.5.1'
+    'fresh-after-receipt' = '0.5.1'
 }
 $engine = (Get-Process -Id $PID).Path
 $pathBefore = [Environment]::GetEnvironmentVariable('Path', 'User')
@@ -205,9 +239,17 @@ try {
         $directory = Join-Path $root $checkpoint
         [IO.Directory]::CreateDirectory($directory) | Out-Null
         [IO.File]::WriteAllText((Join-Path $directory '.proofline-test-only'), 'DISPOSABLE_REAL_UPGRADE_TEST')
-        $oldExe = Install-ProoflineArchive $oldArchive $oldManifest '0.5.1' $directory
-        $oldDigest = Assert-Installed $directory '0.5.1'
-        Write-Host "Initial v0.5.1 installation validated for $checkpoint."
+        $isFresh = $checkpoint -like 'fresh-*'
+        $oldDigest = $null
+        if ($isFresh) {
+            [IO.File]::WriteAllText((Join-Path $directory '.first-install-case'), 'DISPOSABLE')
+            Write-Host "Vacant first-install sandbox prepared for $checkpoint."
+        }
+        else {
+            [void](Install-ProoflineArchive $oldArchive $oldManifest '0.5.1' $directory)
+            $oldDigest = Assert-Installed $directory '0.5.1'
+            Write-Host "Initial v0.5.1 installation validated for $checkpoint."
+        }
 
         $copy = Join-Path $root ("instrumented-$checkpoint.ps1")
         Make-InstrumentedInstaller $originalInstaller $copy $checkpoint
@@ -228,8 +270,17 @@ try {
         $journal = Join-Path $directory '.proofline-install.pending.json'
         Require ([IO.File]::Exists($journal)) "No pending journal existed after forced termination at $checkpoint."
         $activeFile = Join-Path $directory 'proofline.exe'
-        $activeDigest = (Get-FileHash -LiteralPath $activeFile -Algorithm SHA256).Hash
-        if ($checkpoint -eq 'after-journal') {
+        $activeDigest = $null
+        if ([IO.File]::Exists($activeFile)) {
+            $activeDigest = (Get-FileHash -LiteralPath $activeFile -Algorithm SHA256).Hash
+        }
+        if ($checkpoint -in @('fresh-after-journal', 'fresh-after-stage')) {
+            Require ($null -eq $activeDigest) 'Fresh install published executable before intended checkpoint.'
+        }
+        elseif ($checkpoint -in @('fresh-after-move', 'fresh-after-receipt')) {
+            Require ($null -ne $activeDigest) 'Fresh install did not publish executable before checkpoint.'
+        }
+        elseif ($checkpoint -eq 'after-journal') {
             Require ($activeDigest -ceq $oldDigest) 'Journal checkpoint unexpectedly changed old executable.'
         }
         elseif ($checkpoint -eq 'corrupt-after-switch') {
@@ -250,14 +301,67 @@ try {
         [IO.File]::WriteAllText($recoverStderr, $recovery.ErrorOutput)
         $recoverOutput = $recovery.Output + $recovery.ErrorOutput
         Require ($recoverExit -eq 0) "Fresh recovery process failed for $checkpoint; output: $recoverOutput"
-        $digest = Assert-Installed $directory $expected[$checkpoint] ($checkpoint -eq 'corrupt-after-switch')
-        if ($expected[$checkpoint] -eq '0.5.1') {
-            Require ($digest -ceq $oldDigest) 'Rollback did not preserve the original executable bytes.'
+        $digest = $null
+        if ($expected[$checkpoint] -eq 'absent') {
+            Require (-not [IO.File]::Exists($activeFile)) 'Interrupted fresh install unexpectedly published an executable.'
+            Require (-not [IO.File]::Exists((Join-Path $directory '.proofline-install.receipt.json'))) 'Interrupted fresh install incorrectly wrote a receipt.'
+            Require (-not [IO.File]::Exists($journal)) 'Interrupted fresh install left a pending journal.'
+            $unclaimed = @(Get-ChildItem -LiteralPath $directory -Force |
+                Where-Object { $_.Name -match '^\.proofline-staged-[a-f0-9]{32}\.exe
+        $results += [pscustomobject]@{
+            checkpoint = $checkpoint
+            workerExitCode = $workerExit
+            recoveryExitCode = $recoverExit
+            recoveredVersion = $expected[$checkpoint]
+            recoveredSha256 = $digest
+        }
+    }
+
+    Require ([Environment]::GetEnvironmentVariable('Path', 'User') -ceq $pathBefore) 'User PATH was modified.'
+    $passed = $true
+}
+catch {
+    Write-Warning "FAIL real installer interruption test: $($_.Exception.ToString())"
+}
+finally {
+    if ($passed -and -not $KeepFiles) {
+        try {
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction Stop
+            $cleanup = $true
+        }
+        catch {
+            Write-Warning "Could not delete disposable test directory: $($_.Exception.Message)"
+            $passed = $false
+        }
+    }
+}
+Write-Host "Completed $($results.Count) of $($scenarios.Count) interruption scenarios."
+if ($passed) {
+    Write-Host 'Real Windows installer interruption integration: PASS'
+    if ($KeepFiles) { Write-Host "Retained test evidence at $root" }
+    else { Write-Host "Cleaned isolated test directory: $cleanup" }
+}
+else {
+    Write-Warning "Failure evidence preserved at: $root"
+    exit 1
+}
+ })
+            Require ($unclaimed.Count -eq 0) 'Fresh-install recovery left a staged executable.'
+            Write-Host "PASS $checkpoint; fresh process removed interrupted first-install files."
         }
         else {
-            Require ($digest -cne $oldDigest) 'Recovery did not install the different new executable.'
+            $digest = Assert-Installed $directory $expected[$checkpoint] ($checkpoint -eq 'corrupt-after-switch')
+            if ($isFresh) {
+                Require ($null -ne $digest) 'First-install recovery failed to finalize new executable.'
+            }
+            elseif ($expected[$checkpoint] -eq '0.5.1') {
+                Require ($digest -ceq $oldDigest) 'Rollback did not preserve original executable bytes.'
+            }
+            else {
+                Require ($digest -cne $oldDigest) 'Recovery did not install the different new executable.'
+            }
+            Write-Host "PASS $checkpoint; fresh process recovered to v$($expected[$checkpoint])."
         }
-        Write-Host "PASS $checkpoint; fresh process recovered to v$($expected[$checkpoint])."
         $results += [pscustomobject]@{
             checkpoint = $checkpoint
             workerExitCode = $workerExit
