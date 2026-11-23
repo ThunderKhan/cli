@@ -37,6 +37,14 @@ def main(destination: Path) -> None:
     binary = pe_fixture()
     base = pack(("proofline.exe", binary, tarfile.REGTYPE))
     (destination / "valid.tar.gz").write_bytes(base)
+    upgraded_binary = bytearray(binary)
+    upgraded_binary[512] = 0x42  # different digest, same fake PE header
+    upgraded = pack(("proofline.exe", bytes(upgraded_binary), tarfile.REGTYPE))
+    (destination / "upgrade.tar.gz").write_bytes(upgraded)
+    (destination / "SHA256SUMS-upgrade").write_text(
+        f"{hashlib.sha256(upgraded).hexdigest()}  proofline-x86_64-pc-windows-msvc.tar.gz\n",
+        encoding="ascii",
+    )
     (destination / "bad-digest.tar.gz").write_bytes(base + b"tampered")
     (destination / "traversal.tar.gz").write_bytes(
         pack(("../proofline.exe", binary, tarfile.REGTYPE))
