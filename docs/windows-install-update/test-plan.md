@@ -345,3 +345,24 @@ pwsh.exe -NoProfile -File .\scripts\test_install_interruption_real_windows.ps1
 This last group only creates isolated/temp installations; `scripts/test_install_user_path_ci_windows.ps1` is *not* for local execution. If `pwsh.exe` is absent, the proper next verification environment is the planned Windows CI matrix, not an assumption that PowerShell 7 behaves exactly like 5.1.
 
 **Outstanding:** No upstream PR yet; CI must run after a focused branch/PR is prepared, and its minute budget/availability must be considered before starting any workflow.
+
+
+## PowerShell 7 full local integration results — PASS (2026-11-23)
+
+Contributor ran the tests using the portable `pwsh.exe` from `%LOCALAPPDATA%\Programs\PowerShell\7` on a Windows host, with the development branch at `a68f94c`:
+
+| Test | PowerShell 7 result |
+| --- | --- |
+| Offline installer validator | **PASS: 12 passed, 0 failed** |
+| Offline install, upgrade and recovery | **PASS: 13 passed, 0 failed** |
+| Separate-process lock exclusion | **PASS: lock refused competing upgrade; upgrade succeeded after release** |
+| Official real-release v0.5.1 → v0.5.2 upgrade | **PASS: installed both real executables; repeated v0.5.2 was a no-op; User PATH unchanged by `-NoModifyPath`** |
+| Real first-install and upgrade interruption integration | **PASS: 8/8 checkpoints recovered via fresh PowerShell process; disposable files cleaned** |
+
+Observed real executable digests:
+- v0.5.1: `442D14583870A4E44291BD0AD118DFC536AA9D1096FA6E669BCD01B29BCEF379`
+- v0.5.2: `7B93F8FE807AAB90133FF19908921079E5A91A51A705118BC3063DC74BD9CCB5`
+
+**Interpretation:** The installer has passed the full user-run Windows PowerShell **5.1 and 7** local matrix for these exact scenarios. This supersedes earlier sections that marked the PowerShell 7 suite as unexecuted. It is not evidence of a GitHub Actions CI run: the workflow's current-user PATH **registry write/read/restore** integration check is still **not executed**, and no upstream pull request has been opened. The user has not explicitly confirmed whether any GUI consoles flashed during the latest hidden-worker tests. Physical power-loss / disk failure durability and independent publisher signing remain outside the verified scope.
+
+**Next gate:** run the Windows CI-only User PATH persistence test on a disposable hosted runner when a focused PR is opened (subject to GitHub Actions capacity); keep registry mutation off the contributor's personal Windows account.
