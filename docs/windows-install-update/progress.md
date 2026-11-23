@@ -44,7 +44,7 @@ A SHA-256 checksum downloaded from the same origin as its archive establishes co
 3. Inspect the results before attempting any download/installation.
 4. Real installer test later, in an isolated directory with an actual published release, preferably a disposable Windows account/VM. The default path changes user PATH; use `-NoModifyPath` for isolation. Never test upgrades on a valuable installed executable until M2 is delivered.
 
-## M2 — Installer-managed upgrade/recovery (next implementation)
+## M2 — Installer-managed upgrade/recovery (candidate committed, Windows verification pending)
 
 - Reuse prior research's observed `File.Replace` behavior, but with a verified old-executable copy and recoverable pending transaction.
 - Validate old version, new candidate and receipt across success and injected failures.
@@ -95,3 +95,30 @@ Get-ChildItem -LiteralPath $probeDir -Force | Select-Object Name, Length
 **Remaining M1 caveat:** A successful run does not independently establish resistance to all malicious release-server responses, execution races, crash consistency, nor absence of external compromise. PowerShell 7 and user PATH persistence are untested.
 
 **M2 scope gate:** Implement upgrade in a separate logical milestone without expanding the PR to native Windows self-update. Preserve a known-good installed binary and receipt, keep a pending journal over the replacement window, detect interrupted swaps, verify the result and restore the previous verified executable on ordinary failures. Test upgrade from **two distinct authentic release versions** in a disposable directory before touching a normal installation. Make unexpected file/receipt states fail closed and leave evidence.
+
+
+## M2 implementation checkpoint — 2026-11-23
+
+Code is present on `feat/windows-install-update` in `install.ps1`:
+
+- A managed existing installation must have a receipt whose exact SHA-256 digest matches the active file. An unrecognized or incomplete installation is not overwritten.
+- The new verified release is staged and smoke-checked **before** modifying the old file.
+- The old executable is copied into a verified recovery file, then a versioned pending record is persisted before `File.Replace` attempts an upgrade.
+- The installed file is hash-checked and run with `--version` before the receipt is committed; known recovery artifacts are cleaned with the pending journal removed last.
+- The next installer run checks for a pending operation **before networking**, so recovery is not blocked by an unavailable release server.
+- Recovery classifies actual file state: verified new → finalize; verified old → keep; invalid active + verified recovery copy → restore; no verified copy → refuse and retain journal.
+- The installer uses the same stable exclusive lock for upgrades and recovery.
+
+New offline tests in `scripts/test_install_upgrade_windows.ps1` use **fake, never-executed** PE archives. The tests deliberately replace the executable smoke-check only within the test process. Cases: normal old → new upgrade, repeat no-op, finish interrupted upgrade, rollback from corrupted active, ambiguous state refusal, and exclusive-lock failure.
+
+**Status: code authored and committed but NOT executed on Windows.** The M2 installer is not approved for production installation. First run these offline tests; fix any failures. Only afterward exercise two real signed-over-HTTPS releases (pinned `0.5.1` → `0.5.2`) in a fresh disposable installation folder with `-NoModifyPath`.
+
+Command to run from repository root:
+
+```powershell
+git pull --ff-only origin feat/windows-install-update
+powershell.exe -NoProfile -File .\scripts\test_install_windows.ps1
+powershell.exe -NoProfile -File .\scripts\test_install_upgrade_windows.ps1
+```
+
+**Not yet tested:** actual two-release executable upgrade, injected failure in production installer, real concurrent installer processes, Windows process-handle failure, true power-loss durability, PS7, or PATH writes. Avoid claiming these have passed.

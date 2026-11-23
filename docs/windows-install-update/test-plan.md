@@ -185,3 +185,25 @@ Contributor ran the installer as a non-elevated PowerShell 5.1 script into a new
 **Important testing boundary:** Direct expected file hash and detailed receipt contents were not independently printed; the installer asserted checksum/record integrity and returned success. This is a successful M1 integration run, **not yet upgrade or process interruption validation**. No PowerShell 7 or PATH-registry test is claimed.
 
 **Next test requirement for M2:** use two pinned published releases, e.g. 0.5.1 to 0.5.2 (check release existence before testing), test clean upgrade and idempotency, inject failure between writing backup/pending/replace/receipt, independently compare old/new hashes, prove executable runnable after rollback, and verify two separate installer processes cannot corrupt the installation. Keep all of this in a disposable directory and with `-NoModifyPath`.
+
+
+## M2 proposed upgrade test suite — candidate committed, execution pending
+
+Source: `scripts/test_install_upgrade_windows.ps1`, using the fake PE archive fixtures built by `scripts/generate_windows_installer_fixtures.py`. The test replaces the binary version-check function in its own PowerShell process, so no synthetic executable is run.
+
+| Offline case | Expected invariant |
+| --- | --- |
+| Existing managed version upgraded to distinct verified candidate | New hash and receipt; pending journal and recovery copy cleaned |
+| Repeat installation of same version | No replacement; same receipt and binary |
+| Interrupted upgrade with verified new active | Finalize receipt, delete pending and verified old copy |
+| Corrupted active executable with verified old copy | Restore old hash and receipt |
+| Corrupted active executable and old backup | Refuse, retain journal and evidence |
+| Locked installation path | Refuse before changing old executable |
+
+**Results:** NOT YET RUN on Windows. Run in Windows PowerShell 5.1:
+
+```powershell
+powershell.exe -NoProfile -File .\scripts\test_install_upgrade_windows.ps1
+```
+
+The suite uses new GUID-named temporary directories and leaves them in place on failure. **Before running a real M2 upgrade**, review these results and then test pinned authentic releases in a disposable directory using `-NoModifyPath`. Existing production installations must not be chosen for the first M2 tests.
