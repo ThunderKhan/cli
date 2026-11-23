@@ -253,6 +253,14 @@ try {
         }
     }
 }
+catch {
+    $allPassed = $false
+    $cases += [pscustomobject]@{
+        scenario = 'driver-error'
+        status = 'FAIL'
+        detail = $_.Exception.ToString()
+    }
+}
 finally {
     if ($allPassed) {
         try {
