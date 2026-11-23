@@ -228,4 +228,22 @@ powershell.exe -NoProfile -File .\scripts\test_install_upgrade_real_windows.ps1
 powershell.exe -NoProfile -File .\scripts\test_install_concurrency_windows.ps1
 ```
 
-**Not executed on Windows yet.** This tests lock contention from a second OS process, not a fully concurrent pair of live downloads and writes. It is wholly offline and never launches the artificial PE fixture binaries.
+**PASS on contributor's Windows PowerShell 5.1 (2026-11-23).** A second process held the installer lock; a competing upgrade was refused without changing the old executable, receipt, or pending state. After releasing the holder, the upgrade completed and the temporary sandbox was cleaned. This was deterministic contention, not arbitrary simultaneous installer start times.
+
+
+## Real-installer interruption tests — scripted, Windows runtime pending
+
+`scripts/test_install_interruption_real_windows.ps1` is a self-contained integration harness:
+- Downloads official pinned 0.5.1 and 0.5.2 archives and SHA256SUMS over the installer's existing restricted HTTPS transport and verifies the archives.
+- Installs actual v0.5.1 in a fresh TEMP directory.
+- Generates a **temporary copy of install.ps1** with exactly one test-only process-kill injection, leaving the production installer source unchanged.
+- Forces child PowerShell termination after journal write, after active replacement, after deliberate corruption of the new active executable, and after receipt update.
+- Launches a **fresh PowerShell process** using unmodified installer code to recover offline, then validates the runnable restored/finalized executable's exact version and matching receipt and confirms removal of the pending journal.
+- Checks the User PATH value is unchanged, and cleans only its own TEMP directory after success. Failure evidence remains in the sandbox.
+
+```powershell
+git pull --ff-only origin feat/windows-install-update
+powershell.exe -NoProfile -File .\scripts\test_install_interruption_real_windows.ps1
+```
+
+**Execution status: NOT RUN on Windows.** It makes genuine HTTPS requests, runs official executables, and forcibly stops its **test-only child** processes; it does not kill the caller or alter a normal Proofline installation. It tests **process termination**, not disk/power-loss durability. A passing result does not prove all possible interrupt timings or real network interruption safety.

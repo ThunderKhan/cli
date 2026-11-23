@@ -175,4 +175,22 @@ git pull --ff-only origin feat/windows-install-update
 powershell.exe -NoProfile -File .\scripts\test_install_concurrency_windows.ps1
 ```
 
-**Status:** authored and committed, **not run on Windows**. This proves (if it passes) that one cooperating installer cannot commit while another process holds the lock. It is not a randomized simultaneous-download race or a power-loss test.
+**Windows PowerShell 5.1 result, contributor-run 2026-11-23: PASS.** A second OS process held the stable lock; the competing installer refused to upgrade and left the old executable, receipt and journal unchanged; following release of the lock the upgrade succeeded and temporary files were cleaned. This validates cooperative cross-process lock exclusion in this deterministic scenario; it does not prove arbitrary race ordering or OS crash durability.
+
+
+## Real-installer interruption tests — scripted, Windows runtime pending
+
+`scripts/test_install_interruption_real_windows.ps1` is a self-contained integration harness:
+- Downloads official pinned 0.5.1 and 0.5.2 archives and SHA256SUMS over the installer's existing restricted HTTPS transport and verifies the archives.
+- Installs actual v0.5.1 in a fresh TEMP directory.
+- Generates a **temporary copy of install.ps1** with exactly one test-only process-kill injection, leaving the production installer source unchanged.
+- Forces child PowerShell termination after journal write, after active replacement, after deliberate corruption of the new active executable, and after receipt update.
+- Launches a **fresh PowerShell process** using unmodified installer code to recover offline, then validates the runnable restored/finalized executable's exact version and matching receipt and confirms removal of the pending journal.
+- Checks the User PATH value is unchanged, and cleans only its own TEMP directory after success. Failure evidence remains in the sandbox.
+
+```powershell
+git pull --ff-only origin feat/windows-install-update
+powershell.exe -NoProfile -File .\scripts\test_install_interruption_real_windows.ps1
+```
+
+**Execution status: NOT RUN on Windows.** It makes genuine HTTPS requests, runs official executables, and forcibly stops its **test-only child** processes; it does not kill the caller or alter a normal Proofline installation. It tests **process termination**, not disk/power-loss durability. A passing result does not prove all possible interrupt timings or real network interruption safety.
