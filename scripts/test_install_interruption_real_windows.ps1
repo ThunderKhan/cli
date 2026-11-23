@@ -42,7 +42,7 @@ function Assert-Sandbox([string]$Directory) {
         throw 'Missing disposable test marker; refusing to touch a real installation.'
     }
 }
-function Assert-Installed([string]$Directory, [string]$Version) {
+function Assert-Installed([string]$Directory, [string]$Version, [bool]$ExpectDamagedEvidence = $false) {
     $exe = Join-Path $Directory 'proofline.exe'
     $receipt = Join-Path $Directory '.proofline-install.receipt.json'
     $pending = Join-Path $Directory '.proofline-install.pending.json'
@@ -59,6 +59,18 @@ function Assert-Installed([string]$Directory, [string]$Version) {
     $debris = @(Get-ChildItem -LiteralPath $Directory -Force |
         Where-Object { $_.Name -match '\A\.proofline-(recovery|api-backup|staged|restore)-' })
     Require ($debris.Count -eq 0) 'A recovery or staging executable remains after successful repair.'
+    # A corrupted active executable is intentionally kept in a quarantine
+    # path following successful rollback. Don't conceal that evidence merely
+    # to make this test green; verify exactly what was preserved.
+    $damaged = @(Get-ChildItem -LiteralPath $Directory -Force |
+        Where-Object { $_.Name -match '\A\.proofline-damaged-[0-9a-f]{32}\.exe\z' })
+    if ($ExpectDamagedEvidence) {
+        Require ($damaged.Count -eq 1) 'Expected one quarantined corrupted executable.'
+        Require ([IO.File]::ReadAllText($damaged[0].FullName) -ceq 'INTENTIONALLY_CORRUPTED') 'Quarantined contents differ from injected corruption.'
+    }
+    else {
+        Require ($damaged.Count -eq 0) 'Unexpected damaged executable remains.'
+    }
     return $hash
 }
 
@@ -181,7 +193,7 @@ try {
         $recoverOutput = @(& $engine -NoProfile -NonInteractive -File $PSCommandPath -Mode Recover -CaseDir $directory -InstallerCopy $originalInstaller 2>&1)
         $recoverExit = $LASTEXITCODE
         Require ($recoverExit -eq 0) "Fresh recovery process failed for $checkpoint; output: $($recoverOutput -join ' ')"
-        $digest = Assert-Installed $directory $expected[$checkpoint]
+        $digest = Assert-Installed $directory $expected[$checkpoint] ($checkpoint -eq 'corrupt-after-switch')
         if ($expected[$checkpoint] -eq '0.5.1') {
             Require ($digest -ceq $oldDigest) 'Rollback did not preserve the original executable bytes.'
         }

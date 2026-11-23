@@ -437,12 +437,22 @@ function Get-ProoflineTransactionPaths([string]$Directory, [string]$Id) {
         old = [IO.Path]::Combine($Directory, ".proofline-recovery-$Id.exe")
         api = [IO.Path]::Combine($Directory, ".proofline-api-backup-$Id.exe")
         damaged = [IO.Path]::Combine($Directory, ".proofline-damaged-$Id.exe")
+        stage = [IO.Path]::Combine($Directory, ".proofline-staged-$Id.exe")
     }
 }
 
-function Clear-ProoflineUpgradeFiles([hashtable]$Paths, [string]$Pending) {
-    foreach ($key in @('old', 'api')) {
+function Clear-ProoflineUpgradeFiles([hashtable]$Paths, [string]$Pending, [string]$NewHash) {
+    # Deleting every matching ".proofline-staged-*.exe" would remove files
+    # belonging to unrelated attempts. A schema-2 journal's validated ID
+    # identifies precisely one stage belonging to this transaction.
+    foreach ($key in @('old', 'api', 'stage')) {
         Assert-ProoflineNoReparse $Paths[$key]
+    }
+    if ([IO.File]::Exists($Paths.stage) -and
+        (Get-ProoflineSha256 $Paths.stage) -cne $NewHash) {
+        throw 'Pending upgrade stage has unexpected contents; preserving transaction evidence.'
+    }
+    foreach ($key in @('old', 'api', 'stage')) {
         if ([IO.File]::Exists($Paths[$key])) { [IO.File]::Delete($Paths[$key]) }
     }
     [IO.File]::Delete($Pending) # delete journal LAST
@@ -489,7 +499,7 @@ function Recover-ProoflinePending([string]$Directory) {
         try {
             Assert-ProoflineExeVersion $destination $record.newVersion
             Write-ProoflineReceipt $receipt $record.newVersion $record.newSha256
-            Clear-ProoflineUpgradeFiles $paths $pending
+            Clear-ProoflineUpgradeFiles $paths $pending $record.newSha256
             Write-Host "Finalized interrupted Proofline $($record.newVersion) upgrade."
             return
         } catch {
@@ -501,7 +511,7 @@ function Recover-ProoflinePending([string]$Directory) {
     if ($activeHash -ceq $record.oldSha256) {
         Assert-ProoflineExeVersion $destination $record.oldVersion
         Write-ProoflineReceipt $receipt $record.oldVersion $record.oldSha256
-        Clear-ProoflineUpgradeFiles $paths $pending
+        Clear-ProoflineUpgradeFiles $paths $pending $record.newSha256
         Write-Host "Previous Proofline $($record.oldVersion) installation remains usable."
         return
     }
@@ -537,7 +547,7 @@ function Recover-ProoflinePending([string]$Directory) {
         }
         Assert-ProoflineExeVersion $destination $record.oldVersion
         Write-ProoflineReceipt $receipt $record.oldVersion $record.oldSha256
-        Clear-ProoflineUpgradeFiles $paths $pending
+        Clear-ProoflineUpgradeFiles $paths $pending $record.newSha256
         Write-Host "Restored verified Proofline $($record.oldVersion) after interrupted upgrade."
     }
     finally {
@@ -614,7 +624,11 @@ function Install-ProoflineArchive(
                 return $destination
             }
         }
-        $stage = [IO.Path]::Combine($directory, ('.proofline-staged-' + [guid]::NewGuid().ToString('N') + '.exe'))
+        # Tie the stage path to the same validated transaction ID that the
+        # pending journal records. Recovery can now clean ONLY its own stage.
+        $id = [guid]::NewGuid().ToString('N')
+        $stage = [IO.Path]::Combine($directory, ('.proofline-staged-' + $id + '.exe'))
+        Assert-ProoflineNoReparse $stage
         try {
             $stream = [IO.File]::Open($stage, [IO.FileMode]::CreateNew,
                 [IO.FileAccess]::Write, [IO.FileShare]::None)
@@ -641,7 +655,6 @@ function Install-ProoflineArchive(
             }
 
             # Upgrade: independently preserve the previous verified executable.
-            $id = [guid]::NewGuid().ToString('N')
             $paths = Get-ProoflineTransactionPaths $directory $id
             foreach ($path in $paths.Values) { Assert-ProoflineNoReparse $path }
             [IO.File]::Copy($destination, $paths.old, $false)
@@ -664,7 +677,7 @@ function Install-ProoflineArchive(
                 }
                 Assert-ProoflineExeVersion $destination $ReleaseVersion
                 Write-ProoflineReceipt $receipt $ReleaseVersion $hash
-                Clear-ProoflineUpgradeFiles $paths $pending
+                Clear-ProoflineUpgradeFiles $paths $pending $hash
                 Write-Host "Upgraded Proofline $($oldReceipt.version) to $ReleaseVersion."
                 return $destination
             }

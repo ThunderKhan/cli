@@ -130,6 +130,25 @@ try {
         Require ((Get-ProoflineSha256 (Active 'repeat')) -ceq $script:newHash) 'Repeat changed active bytes.'
         Assert-ProoflineRecord (Receipt 'repeat') '0.5.2' $script:newHash
     }
+    Check 'interrupted pre-switch stage cleaned by matching transaction ID' {
+        $dir = PrepareOld 'pre-switch-stage'
+        $paths = MakePending $dir
+        [IO.File]::WriteAllBytes($paths.stage, (Get-ProoflineTarExecutable $script:newArchive))
+        Invoke-ProoflinePendingRepair $dir
+        Require (-not [IO.File]::Exists($paths.stage)) 'Verified staged executable survived completed recovery.'
+        Require (-not [IO.File]::Exists((Pending 'pre-switch-stage'))) 'Recovered transaction journal remains.'
+        Require ((Get-ProoflineSha256 (Active 'pre-switch-stage')) -ceq $script:oldHash) 'Old executable changed.'
+        Assert-ProoflineRecord (Receipt 'pre-switch-stage') '0.5.1' $script:oldHash
+    }
+    Check 'untrusted pre-switch stage is preserved with the journal' {
+        $dir = PrepareOld 'tampered-stage'
+        $paths = MakePending $dir
+        [IO.File]::WriteAllText($paths.stage, 'NOT_THE_VERIFIED_CANDIDATE', [Text.Encoding]::ASCII)
+        Must-Throw { Invoke-ProoflinePendingRepair $dir }
+        Require ([IO.File]::Exists((Pending 'tampered-stage'))) 'Unknown staged data lost its pending record.'
+        Require ([IO.File]::Exists($paths.stage)) 'Unknown staged data was deleted.'
+        Require ((Get-ProoflineSha256 (Active 'tampered-stage')) -ceq $script:oldHash) 'Old executable was changed.'
+    }
     Check 'new active detected and finalized after restart' {
         $dir = PrepareOld 'finalize'
         $paths = MakePending $dir

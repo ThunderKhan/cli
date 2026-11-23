@@ -194,3 +194,16 @@ powershell.exe -NoProfile -File .\scripts\test_install_interruption_real_windows
 ```
 
 **Execution status: NOT RUN on Windows.** It makes genuine HTTPS requests, runs official executables, and forcibly stops its **test-only child** processes; it does not kill the caller or alter a normal Proofline installation. It tests **process termination**, not disk/power-loss durability. A passing result does not prove all possible interrupt timings or real network interruption safety.
+
+
+## 2026-11-23: interruption test failure and targeted recovery fix
+
+Contributor ran `scripts/test_install_interruption_real_windows.ps1` against real pinned release archives. The first scenario (`after-journal`) stopped with `A recovery or staging executable remains after successful repair.` The script recorded `Completed 0 of 4 interruption scenarios` and preserved its disposable TEMP evidence directory. **This is a test failure, not a passing interruption result.** Earlier offline and live upgrade tests remain valid for the behaviors they actually covered.
+
+**Root cause from source inspection:** the previous installer created the stage under an independent random GUID, while its schema-2 pending journal contained a different transaction GUID. If its process died after the journal was written but before `File.Replace`, recovery correctly kept the old executable, yet could not identify and delete the still-verified staged executable. Its catch/cleanup logic never ran because the worker was forcibly terminated.
+
+**Fix authored (Windows rerun pending):** assign one transaction GUID before staging. Reuse it in both `.proofline-staged-ID.exe` and the schema-2 pending journal; recovery reconstructs the exact stage path from the validated journal ID, verifies its SHA-256 is the expected new digest before deleting it, and removes the pending journal last. No wildcard deletion of unrelated stage files. Add offline checks for clean staged-file removal and refusal/preservation when staged contents are untrusted.
+
+**Deliberate forensic behavior:** after recovery from an intentionally corrupted active executable, `.proofline-damaged-ID.exe` is kept to aid diagnosis. The real interruption harness now allows and verifies that one quarantined file only in the corruption scenario. All other scenarios still reject leftover staged/recovery artifacts. Preserving a quarantined damaged file is not the same as failing recovery.
+
+**Status:** Source updates committed, **not tested on Windows**. Re-run the offline suite (9 expected assertions) and the full real-interruption suite; do not claim all scenarios passed until the Windows output confirms them. Older first-install journals may not carry a matching stage ID; this fix addresses new schema-2 upgrade journals created after it, not arbitrary old orphan files.
