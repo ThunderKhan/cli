@@ -63,3 +63,26 @@ Contributor ran these from `D:\Projects\cli` after pulling the current developme
 All results are evidenced by user-provided Windows PowerShell 5.1 output, not a separate execution by this assistant. This supersedes previously pending statements for these exact cases.
 
 **Still unverified:** PowerShell 7 runtime, real User PATH write/read from a new process, whether graphical PowerShell windows appeared on the user's desktop, full device power-loss durability, and arbitrary concurrent/interrupted filesystem writes.
+
+
+## 2026-11-23: PowerShell 7 and user PATH persistence validation prepared
+
+- Added `scripts/test_install_user_path_ci_windows.ps1`, which **refuses to run outside a GitHub Actions Windows runner**. On that disposable runner it writes a temporary GUID-named directory into the **current user's** PATH, verifies a separate fresh PowerShell process sees that registry change, checks the operation remains idempotent and restores the original User PATH in `finally`. If an unexpected concurrent PATH edit occurs, it refuses to overwrite the new value. This makes it unsuitable for running on the contributor's personal Windows profile.
+- The `windows-installer.yml` workflow now runs that CI-only User PATH test in both its `powershell.exe` 5.1 and `pwsh.exe` 7 matrix jobs, after the offline suites. Its trigger is **PR + manual dispatch only**, not a push to the development branch.
+- Fixed `scripts/test_install_upgrade_real_windows.ps1` to invoke the same PowerShell binary/edition that the contributor uses to launch the test. Previously, an outer `pwsh` invocation still delegated each real install to `powershell.exe`, which would not meaningfully check the PS7 installer path.
+
+**Execution status: not yet tested.** All new CI PATH checks and real-release PS7 coverage need execution evidence. Do not mark them as passing from the successful Windows 5.1 logs.
+
+Optional local PowerShell 7 smoke test (only if `pwsh.exe` is already available):
+
+```powershell
+pwsh.exe -NoProfile -File .\scripts\test_install_windows.ps1
+pwsh.exe -NoProfile -File .\scripts\test_install_upgrade_windows.ps1
+pwsh.exe -NoProfile -File .\scripts\test_install_concurrency_windows.ps1
+pwsh.exe -NoProfile -File .\scripts\test_install_upgrade_real_windows.ps1
+pwsh.exe -NoProfile -File .\scripts\test_install_interruption_real_windows.ps1
+```
+
+This last group only creates isolated/temp installations; `scripts/test_install_user_path_ci_windows.ps1` is *not* for local execution. If `pwsh.exe` is absent, the proper next verification environment is the planned Windows CI matrix, not an assumption that PowerShell 7 behaves exactly like 5.1.
+
+**Outstanding:** No upstream PR yet; CI must run after a focused branch/PR is prepared, and its minute budget/availability must be considered before starting any workflow.
