@@ -106,6 +106,51 @@ try {
         }
     }
 
+    Check 'interrupted fresh install cleans only verified matching stage' {
+        $dir = Join-Path $root 'fresh-stage'
+        [IO.Directory]::CreateDirectory($dir) | Out-Null
+        $id = [guid]::NewGuid().ToString('N')
+        $stage = Join-Path $dir ('.proofline-staged-' + $id + '.exe')
+        $other = Join-Path $dir ('.proofline-staged-' + [guid]::NewGuid().ToString('N') + '.exe')
+        [IO.File]::WriteAllBytes($stage, (Get-ProoflineTarExecutable $script:oldArchive))
+        [IO.File]::WriteAllText($other, 'UNRELATED_STAGING_EVIDENCE')
+        Write-ProoflineAtomicRecord (Join-Path $dir '.proofline-install.pending.json') (ConvertTo-Json -Compress -InputObject ([ordered]@{
+            schema = 3; id = $id; version = '0.5.1'; sha256 = $script:oldHash
+        }))
+        Invoke-ProoflinePendingRepair $dir
+        Require (-not [IO.File]::Exists($stage)) 'Transaction-owned verified stage survived cleanup.'
+        Require ([IO.File]::Exists($other)) 'Unrelated staged file was removed.'
+        Require (-not [IO.File]::Exists((Join-Path $dir '.proofline-install.pending.json'))) 'Fresh pending record remains.'
+        Require (-not [IO.File]::Exists((Join-Path $dir 'proofline.exe'))) 'Interrupted install unexpectedly published an executable.'
+    }
+    Check 'interrupted fresh install refuses an unverified stage' {
+        $dir = Join-Path $root 'fresh-tampered'
+        [IO.Directory]::CreateDirectory($dir) | Out-Null
+        $id = [guid]::NewGuid().ToString('N')
+        $stage = Join-Path $dir ('.proofline-staged-' + $id + '.exe')
+        [IO.File]::WriteAllText($stage, 'INCOMPLETE_DOWNLOAD')
+        $journal = Join-Path $dir '.proofline-install.pending.json'
+        Write-ProoflineAtomicRecord $journal (ConvertTo-Json -Compress -InputObject ([ordered]@{
+            schema = 3; id = $id; version = '0.5.1'; sha256 = $script:oldHash
+        }))
+        Must-Throw { Invoke-ProoflinePendingRepair $dir }
+        Require ([IO.File]::Exists($journal)) 'Journal vanished despite unrecognized stage.'
+        Require ([IO.File]::Exists($stage)) 'Unverified stage was silently discarded.'
+    }
+    Check 'interrupted fresh install finalizes verified published executable' {
+        $dir = Join-Path $root 'fresh-published'
+        [IO.Directory]::CreateDirectory($dir) | Out-Null
+        $id = [guid]::NewGuid().ToString('N')
+        [IO.File]::WriteAllBytes((Join-Path $dir 'proofline.exe'), (Get-ProoflineTarExecutable $script:oldArchive))
+        $journal = Join-Path $dir '.proofline-install.pending.json'
+        Write-ProoflineAtomicRecord $journal (ConvertTo-Json -Compress -InputObject ([ordered]@{
+            schema = 3; id = $id; version = '0.5.1'; sha256 = $script:oldHash
+        }))
+        Invoke-ProoflinePendingRepair $dir
+        Require (-not [IO.File]::Exists($journal)) 'Journal not cleared after successful receipt recovery.'
+        Assert-ProoflineRecord (Join-Path $dir '.proofline-install.receipt.json') '0.5.1' $script:oldHash
+        Require ((Get-ProoflineSha256 (Join-Path $dir 'proofline.exe')) -ceq $script:oldHash) 'First-install recovery modified verified bytes.'
+    }
     Check 'clean upgrade from previous verified install' {
         $dir = PrepareOld 'normal'
         $destination = Install-ProoflineArchive $script:newArchive $script:newSums '0.5.2' $dir
