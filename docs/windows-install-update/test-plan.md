@@ -159,3 +159,12 @@ Old fixture SHA-256: `099D90CBEE62F89E6478E153EB3240EFCBE4AC2231BEDC3E84549BBEAA
 **Not established:** actual Proofline executable validity or ability to run after restore; installer downloads, SHA-256 manifest trust, malicious archives, PATH semantics, multi-process overlap under a real lock, protection from untrusted pending-record tampering, power-loss/OS-crash durability, Windows PowerShell 7 behavior. A failure between writing the temporary pending record and moving it into place was not injected.
 
 **Decision:** Enough evidence to begin the **real installer** implementation and its offline/security tests. Do not spend more time polishing simulated recovery in isolation unless the actual installer exposes a new risk. Carry these invariants into installer integration tests with real executable smoke checks and a genuine cross-process contention test. No installer is yet implemented in this branch.
+
+
+## Milestone 1 validator results (reported 2026-11-23)
+
+Contributor ran `powershell.exe -NoProfile -File .\scripts\test_install_windows.ps1` on their Windows PowerShell 5.1 environment. Final log: **12 passed, 0 failed**. Cases: valid official-style release archive; four manifest rejections; four malicious or malformed archive rejections; modified archive checksum rejection; strict versions; PATH idempotency. First invocation was interrupted with Ctrl+C and produced no validation result; the subsequent complete invocation produced the reported pass summary.
+
+**Do not conflate this with installer integration validation:** these tests dot-source non-mutating validator helpers and never download or execute the artificial fixture binary. The new `install.ps1` has not yet been proven to install a real official release.
+
+**Next evidence:** isolated first-install + no-op reinstall using published release `v0.5.2`, followed by PowerShell 7 and recovery/concurrency tests. No default install path or user PATH should be modified during the initial live test.

@@ -31,7 +31,9 @@ A SHA-256 checksum downloaded from the same origin as its archive establishes co
 
 **Authoring-time verification:** Python syntax compilation of fixture generator passed; fixture generator ran on Linux and independently produced a valid deterministic tar/checksum fixture, with a valid header checksum and one `proofline.exe` member. This is **not** PowerShell test execution.
 
-**Pending:** Windows PowerShell 5.1 syntax/run and all 12 offline test assertions; published release download; fresh install/reinstall; PowerShell 7, real concurrency and interrupted installation tests. No Windows runtime test of `install.ps1` has yet been performed.
+**Windows validation (contributor-reported, 2026-11-23):** Windows PowerShell 5.1 executed `scripts/test_install_windows.ps1` on Windows NT 10.0.26200.0. **12 passed, 0 failed**: official-style valid tar/checksum, missing/duplicate/malformed/mismatched manifests, traversal/unexpected-member/symlink/non-PE archives, tampered archive bytes, strict version syntax and idempotent PATH helper. This is evidence for offline validator functions, **not** a successful download or real installation.
+
+**Pending:** Official release download; fresh install/reinstall; PowerShell 7; actual PATH write; real concurrency; interrupted first installation and upgrade. `install.ps1` has not been end-to-end tested.
 
 ### Safe contributor test sequence
 
@@ -55,3 +57,20 @@ A SHA-256 checksum downloaded from the same origin as its archive establishes co
 ## Future milestone (not part of M1)
 
 Windows `proofline update`: requires a separately tested process-handoff strategy. It should use the same lock, trust and recovery rules as the PowerShell installer.
+
+
+## Next integration checkpoint — isolated published Windows release
+
+GitHub's latest published CLI release observed on 2026-11-23 was **v0.5.2** (published 2026-11-22 21:58 UTC), with `proofline-x86_64-pc-windows-msvc.tar.gz` and `SHA256SUMS` assets. This comes from the GitHub release API. It does **not** independently establish that the Proofline CDN endpoint and installer redirect policy will work; that is part of the next Windows test.
+
+From the repository root in a normal non-admin Windows PowerShell session:
+
+```powershell
+$probeDir = Join-Path $env:TEMP ("proofline-m1-" + [guid]::NewGuid().ToString("N"))
+powershell.exe -NoProfile -File .\install.ps1 -Version 0.5.2 -InstallDir $probeDir -NoModifyPath
+& (Join-Path $probeDir 'proofline.exe') --version
+powershell.exe -NoProfile -File .\install.ps1 -Version 0.5.2 -InstallDir $probeDir -NoModifyPath
+Get-ChildItem -LiteralPath $probeDir -Force | Select-Object Name,Length
+```
+
+Record the full installer output, version command result, no-op reinstall output, and folder listing. Do not delete the test folder before we review any failure; a failed first installation may leave recovery evidence. Do **not** test over an existing real Proofline installation at M1. If an error occurs, capture it rather than editing the script manually.
